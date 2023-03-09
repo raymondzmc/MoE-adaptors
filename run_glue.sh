@@ -1,0 +1,9 @@
+python main.py -dataset cola -output_dir output/glue/cola
+python main.py -dataset mnli -output_dir output/glue/mnli
+python main.py -dataset mrpc -output_dir output/glue/mrpc
+python main.py -dataset qnli -output_dir output/glue/qnli
+python main.py -dataset qqp -output_dir output/glue/qqp
+python main.py -dataset rte -output_dir output/glue/rte
+python main.py -dataset sst2 -output_dir output/glue/sst2
+python main.py -dataset stsb -output_dir output/glue/stsb
+python main.py -dataset wnli -output_dir output/glue/wnli
