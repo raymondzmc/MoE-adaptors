@@ -109,7 +109,6 @@ from transformers.trainer_pt_utils import (
 from transformers.trainer_utils import (
     PREFIX_CHECKPOINT_DIR,
     BestRun,
-    EvalLoopOutput,
     EvalPrediction,
     FSDPOption,
     HPSearchBackend,
@@ -120,6 +119,7 @@ from transformers.trainer_utils import (
     ShardedDDPOption,
     TrainerMemoryTracker,
     TrainOutput,
+    EvalLoopOutput,
     default_compute_objective,
     default_hp_space,
     denumpify_detensorize,
@@ -207,7 +207,6 @@ TRAINER_STATE_NAME = "trainer_state.json"
 OPTIMIZER_NAME = "optimizer.pt"
 SCHEDULER_NAME = "scheduler.pt"
 SCALER_NAME = "scaler.pt"
-
 
 class Trainer:
     """
@@ -318,18 +317,15 @@ class Trainer:
         self.hp_name = None
         self.deepspeed = None
         self.is_in_train = False
-
         # memory metrics - must set up as early as possible
         self._memory_tracker = TrainerMemoryTracker(self.args.skip_memory_metrics)
         self._memory_tracker.start()
-
         # set the correct log level depending on the node
         log_level = args.get_process_log_level()
         logging.set_verbosity(log_level)
 
         # force device and distributed setup init explicitly
         args._setup_devices
-
         if model is None:
             if model_init is not None:
                 self.model_init = model_init
@@ -1764,6 +1760,7 @@ class Trainer:
                 self._load_rng_state(resume_from_checkpoint)
 
             step = -1
+            epoch_loss = 0.
             for step, inputs in enumerate(epoch_iterator):
 
                 # Skip past any already trained steps if resuming training
@@ -1801,6 +1798,8 @@ class Trainer:
                     tr_loss += tr_loss / (1 + self.state.global_step - self._globalstep_last_logged)
                 else:
                     tr_loss += tr_loss_step
+
+                epoch_loss += tr_loss_step
 
                 self.current_flos += float(self.floating_point_ops(inputs))
 
@@ -1873,6 +1872,9 @@ class Trainer:
 
                 if self.control.should_epoch_stop or self.control.should_training_stop:
                     break
+
+            print("Epoch Loss:", epoch_loss.item())
+
             if step < 0:
                 logger.warning(
                     "There seems to be not a single sample in your epoch_iterator, stopping training at step"
@@ -1895,6 +1897,7 @@ class Trainer:
                     )
             if self.control.should_training_stop:
                 break
+            
 
         if args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of training
@@ -1962,7 +1965,6 @@ class Trainer:
         return run_dir
 
     def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
-
         if model is None:
             model = self.model
 
@@ -2539,7 +2541,7 @@ class Trainer:
 
         with self.compute_loss_context_manager():
             loss = self.compute_loss(model, inputs)
-
+        
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
@@ -2794,6 +2796,7 @@ class Trainer:
         eval_dataset: Optional[Dataset] = None,
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
+        output_gates: Optional[bool] = False,
     ) -> Dict[str, float]:
         """
         Run evaluation and returns metrics.
@@ -2834,7 +2837,11 @@ class Trainer:
             prediction_loss_only=True if self.compute_metrics is None else None,
             ignore_keys=ignore_keys,
             metric_key_prefix=metric_key_prefix,
+            output_gates=output_gates,
         )
+
+        if output_gates:
+            output, gates = output
 
         total_batch_size = self.args.eval_batch_size * self.args.world_size
         if f"{metric_key_prefix}_jit_compilation_time" in output.metrics:
@@ -2858,7 +2865,10 @@ class Trainer:
 
         self._memory_tracker.stop_and_update_metrics(output.metrics)
 
-        return output.metrics
+        if output_gates: 
+            return output.metrics, gates
+        else:
+            return output.metrics
 
     def predict(
         self, test_dataset: Dataset, ignore_keys: Optional[List[str]] = None, metric_key_prefix: str = "test"
@@ -2929,6 +2939,7 @@ class Trainer:
         prediction_loss_only: Optional[bool] = None,
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
+        output_gates: Optional[bool] = False,
     ) -> EvalLoopOutput:
         """
         Prediction/evaluation loop, shared by `Trainer.evaluate()` and `Trainer.predict()`.
@@ -2988,12 +2999,14 @@ class Trainer:
         preds_host = None
         labels_host = None
         inputs_host = None
+        gates_host = None
 
         # losses/preds/labels on CPU (final containers)
         all_losses = None
         all_preds = None
         all_labels = None
         all_inputs = None
+        all_gates = None
         # Will be useful when we have an iterable dataset so don't know its length.
 
         observed_num_examples = 0
@@ -3005,10 +3018,14 @@ class Trainer:
                 observed_num_examples += observed_batch_size
                 # For batch samplers, batch_size is not known by the dataloader in advance.
                 if batch_size is None:
-                    batch_size = observed_batch_size
+                    batch_size = observed_batch_size                
 
             # Prediction step
-            loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+            if output_gates:
+                inputs['output_gates'] = True
+                loss, logits, labels, gates = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys, output_gates=output_gates)
+            else:
+                loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys, output_gates=output_gates)
             inputs_decode = self._prepare_input(inputs["input_ids"]) if args.include_inputs_for_metrics else None
 
             if is_torch_tpu_available():
@@ -3038,6 +3055,11 @@ class Trainer:
                 preds_host = logits if preds_host is None else nested_concat(preds_host, logits, padding_index=-100)
             self.control = self.callback_handler.on_prediction_step(args, self.state, self.control)
 
+            if output_gates and gates != None:
+                gates = self._pad_across_processes(gates)
+                gates = self._nested_gather(gates)
+                gates_host = gates if gates_host is None else nested_concat(gates, gates, padding_index=-100)
+
             # Gather all tensors and put them back on the CPU if we have done enough accumulation steps.
             if args.eval_accumulation_steps is not None and (step + 1) % args.eval_accumulation_steps == 0:
                 if losses_host is not None:
@@ -3057,6 +3079,11 @@ class Trainer:
                     labels = nested_numpify(labels_host)
                     all_labels = (
                         labels if all_labels is None else nested_concat(all_labels, labels, padding_index=-100)
+                    )
+                if gates_host is not None:
+                    gates = torch.stack(gates_host).permute(1, 0, 2)
+                    all_gates = (
+                        gates if all_gates is None else nested_concat(all_gates, gates, padding_index=-100)
                     )
 
                 # Set back to None to begin a new accumulation
@@ -3132,7 +3159,10 @@ class Trainer:
             if not key.startswith(f"{metric_key_prefix}_"):
                 metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
 
-        return EvalLoopOutput(predictions=all_preds, label_ids=all_labels, metrics=metrics, num_samples=num_samples)
+        if output_gates:
+            return EvalLoopOutput(predictions=all_preds, label_ids=all_labels, metrics=metrics, num_samples=num_samples), all_gates
+        else:
+            return EvalLoopOutput(predictions=all_preds, label_ids=all_labels, metrics=metrics, num_samples=num_samples)
 
     def _nested_gather(self, tensors, name=None):
         """
@@ -3192,6 +3222,7 @@ class Trainer:
         inputs: Dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
+        output_gates: Optional[bool] = False,
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Perform an evaluation step on `model` using `inputs`.
@@ -3264,10 +3295,11 @@ class Trainer:
                 if has_labels or loss_without_labels:
                     with self.compute_loss_context_manager():
                         loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+                    
                     loss = loss.mean().detach()
 
                     if isinstance(outputs, dict):
-                        logits = tuple(v for k, v in outputs.items() if k not in ignore_keys + ["loss"])
+                        logits = tuple(v for k, v in outputs.items() if k not in ignore_keys + ["loss", "gates"])
                     else:
                         logits = outputs[1:]
                 else:
@@ -3275,7 +3307,7 @@ class Trainer:
                     with self.compute_loss_context_manager():
                         outputs = model(**inputs)
                     if isinstance(outputs, dict):
-                        logits = tuple(v for k, v in outputs.items() if k not in ignore_keys)
+                        logits = tuple(v for k, v in outputs.items() if k not in ignore_keys + ["gates"])
                     else:
                         logits = outputs
                     # TODO: this needs to be fixed and made cleaner later.
@@ -3288,6 +3320,10 @@ class Trainer:
         logits = nested_detach(logits)
         if len(logits) == 1:
             logits = logits[0]
+        
+        if output_gates:
+            gates = outputs['gates']
+            return (loss, logits, labels, gates)
 
         return (loss, logits, labels)
 
@@ -3590,7 +3626,7 @@ class Trainer:
         for step, inputs in enumerate(dataloader):
             loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
             inputs_decode = self._prepare_input(inputs["input_ids"]) if args.include_inputs_for_metrics else None
-
+            
             if loss is not None:
                 losses = loss.repeat(batch_size)
                 losses_host = losses if losses_host is None else torch.cat((losses_host, losses), dim=0)
