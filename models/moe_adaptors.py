@@ -88,6 +88,7 @@ class MoE_Adaptor(nn.Module):
         self.down_proj = nn.Linear(input_dim, hidden_dim)
         self.up_proj = nn.Linear(hidden_dim, input_dim)
         self.num_experts = num_experts
+        self.num_gnn_experts = 3
 
         self.gate = SoftmaxGating(input_dim, num_gates=num_experts)
         
@@ -115,7 +116,15 @@ class MoE_Adaptor(nn.Module):
                     num_hidden_layers=1,
                     dropout=0.1,
                     activation=activation,
-                ) for _ in range(num_experts)
+                ) if i < self.num_gnn_experts else 
+                Expert(
+                    hidden_dim,
+                    hidden_dim=hidden_dim,
+                    output_dim=hidden_dim,
+                    activation=activation,
+                    adapter_scalar=adapter_scalar,
+                    dropout=dropout,
+                ) for i in range(num_experts)
             ])
         else:
             raise NotImplementedError(f"Expert type \"{expert_type}\" not implemented!")
@@ -131,7 +140,7 @@ class MoE_Adaptor(nn.Module):
         experts_output = []
         for i, expert in enumerate(self.experts):
             # t0  = time.time()
-            g = graphs[i] if graphs != None else None
+            g = graphs[i] if graphs != None and i < self.num_gnn_experts else None
             out = expert(x, add_residual=add_residual, residual=residual, graphs=g)
             # t1 = time.time()
             experts_output.append(out)

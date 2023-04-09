@@ -60,6 +60,8 @@ def main(args):
     config.num_relations = num_relations
     config.num_bases = 80
 
+
+    
     model = RobertaForSequenceClassification.from_pretrained(args.plm_name, config=config)
     
     tune_args = TuneArguments(
@@ -111,7 +113,7 @@ def main(args):
         # Plot gates:
         gates = gates.mean(0).cpu().numpy()
         sns.heatmap(gates, cmap='viridis', annot=True)
-
+        
         # Customize the plot, if desired
         plt.title('Gate Values for GLUE')
         plt.xlabel('Semantic (DM), Syntax, Positional (Chain)')
@@ -138,6 +140,7 @@ if __name__ == '__main__':
     parser.add_argument('-plm_name', default='bert-base-uncased', type=str, help='Name or path of pre-trained model for AutoModel')
     parser.add_argument('-adator_type', default='mlp', type=str, choices=['mlp', 'moe'])
     parser.add_argument('-expert_type', default='mlp', type=str, choices=['mlp', 'gnn'])
+    parser.add_argument('-gate_type', default='softmax', type=str, choices=['softmax', 'gumbel'])
     parser.add_argument('-load_graphs', action='store_true')
 
     # Dataset/Dataloader Arguments

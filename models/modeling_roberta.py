@@ -580,12 +580,12 @@ class RobertaLayer(nn.Module):
                                                     )
             elif config.adaptor_type == 'moe':
                 self.ef_ffn_adapter = MoE_Adaptor(input_dim=config.hidden_size,
-                                                  num_experts=3,
+                                                  num_experts=4,
                                                   hidden_dim=config.ffn_bn,
                                                   dropout=config.hidden_dropout_prob,
                                                   adapter_scalar=config.ffn_adapter_scalar,
                                                   expert_type=config.expert_type,
-                                                  num_relations=1,
+                                                  num_relations=2,
                                                   num_bases=config.num_bases,
                                                   )
             else:

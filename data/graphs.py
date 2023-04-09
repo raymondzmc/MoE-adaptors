@@ -204,7 +204,7 @@ def rdf2dgl(rdf_graph, metadata, relation2id, bidirectional=True):
             edge_list.append((int(s), int(o), rel))
             if bidirectional:
                 # Two types of edges (parent vs child) for bidirectional graphs
-                edge_list.append((int(o), int(s), rel + len(relation2id)))
+                edge_list.append((int(o), int(s), -rel))
 
         # sort indices by destination
         edge_list = sorted(edge_list, key=lambda x: (x[1], x[0], x[2]))

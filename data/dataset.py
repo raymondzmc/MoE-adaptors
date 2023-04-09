@@ -254,13 +254,42 @@ def get_dataset(name, tokenizer, load_graphs=False):
             assert dirname != None
                 # raise NotADirectoryError(f"Directory \"{dirname}\" Not Found!")
 
-            path = f'resources/glue_graphs/{dirname}'
+            graph_path = f'resources/dgl_graphs/{name}'
+
+            graphs = {}
+
+            for split in os.listdir(graph_path):
+
+                graphs[split] = {}
+                split_path = os.path.join(graph_path, split):
+
+                for graph_name in os.listdir(split_path):
+                    graph_file_path = os.path.join(split_path, graph_name)
+
+                    graphs[split][graph_name] = [
+                        torch.load(os.path.join(graph_file_path, p)) 
+                            for p in tqdm(os.listdir(graph_file_path), desc=f"Loading {graph_name} graphs in \"{split}\"")
+                    ]
+
+            # Check if there's the same number of graphs
+            assert [len(graphs[split][k]) == graphs[split][graphs[split].keys()[0]] for k in graphs[split].keys()]
+
+
+
             
             # TO DO: only load train and dev to save time
-            load_semantic_graph = True
-            if load_semantic_graph:
-                has_secondary_split = False
-                semantic_graphs, relation2id, num_sem_relations = load_rdf_graphs(path, 'dm', has_secondary_split)
+            # load_semantic_graph = True
+            # if load_semantic_graph:
+            #     has_secondary_split = False
+
+            #     # semantic_graphs, relation2id, num_sem_relations = load_rdf_graphs(path, 'dm', has_secondary_split)
+
+            #     for split in semantic_graphs.keys():
+            #         split_dir = os.path.join('resources', 'dgl_graphs', name, split, 'dm')
+            #         os.makedirs(split_dir, exist_ok=True)
+            #         for idx, graph in enumerate(semantic_graphs[split]):
+            #             torch.save(graph, os.path.join(split_dir, f'{idx}.pt'))
+
                 # semantic_graph_path = os.path.join(path, 'semantic_graphs.pt')
                 # if os.path.exists(semantic_graph_path):
                 #     syntax_graphs, relation2id, num_syn_relations = torch.load(semantic_graph_path)
@@ -270,33 +299,46 @@ def get_dataset(name, tokenizer, load_graphs=False):
                 #     semantic_graphs, relation2id, num_sem_relations = load_rdf_graphs(path, 'dm', has_secondary_split)
                 #     pdb.set_trace()
                 #     torch.save((semantic_graphs, relation2id, num_sem_relations), semantic_graph_path)
-                print("Loaded Semantic graphs!")
+                # print("Loaded Semantic graphs!")
 
-            load_syntax_graph = True
-            if load_syntax_graph:
-                syntax_graph_path = os.path.join(path, 'syntax_graphs.pt')
-                t0 = time.time()
-                if os.path.exists(syntax_graph_path):
-                    syntax_graphs, relation2id, num_syn_relations = torch.load(syntax_graph_path)
-                else:
-                    syntax_graphs, relation2id, num_syn_relations = create_syntax_graphs(raw_dataset, sentence1_key, sentence2_key)
-                    torch.save((syntax_graphs, relation2id, num_sem_relations), syntax_graph_path)
-                t1 = time.time()
-                print(f"Loaded Syntax graphs in {t1-t0}sec!")
+            # load_syntax_graph = True
+            # if load_syntax_graph:
+            #     syntax_graph_path = os.path.join(path, 'syntax_graphs.pt')
+            #     t0 = time.time()
+            #     if os.path.exists(syntax_graph_path):
+            #         syntax_graphs, relation2id, num_syn_relations = torch.load(syntax_graph_path)
+            #     else:
+            #         syntax_graphs, relation2id, num_syn_relations = create_syntax_graphs(raw_dataset, sentence1_key, sentence2_key)
+            #         # torch.save((syntax_graphs, relation2id, num_sem_relations), syntax_graph_path)
+            #     t1 = time.time()
+            #     print(f"Loaded Syntax graphs in {t1-t0}sec!")
 
-            load_chain_graph = True
-            if load_chain_graph:
-                chain_graph_path = os.path.join(path, 'chain_graphs.pt')
-                t0 = time.time()
-                if os.path.exists(chain_graph_path):
-                    chain_graphs, relation2id, num_chain_relations = torch.load(chain_graph_path)
-                else:
-                    chain_graphs, relation2id, num_chain_relations = create_chain_graphs(raw_dataset, sentence1_key, sentence2_key)
-                    torch.save((chain_graphs, relation2id, num_chain_relations), chain_graph_path)
-                t1 = time.time()
-                print(f"Loaded Chain graphs in {t1-t0}sec!")
+            #     for split in syntax_graphs.keys():
+            #         split_dir = os.path.join('resources', 'dgl_graphs', name, split, 'syntax')
+            #         os.makedirs(split_dir, exist_ok=True)
+            #         for idx, graph in enumerate(syntax_graphs[split]):
+            #             torch.save(graph, os.path.join(split_dir, f'{idx}.pt'))
 
-        num_sem_relations = 1
+
+            # load_chain_graph = True
+            # if load_chain_graph:
+            #     chain_graph_path = os.path.join(path, 'chain_graphs.pt')
+            #     t0 = time.time()
+            #     if os.path.exists(chain_graph_path):
+            #         chain_graphs, relation2id, num_chain_relations = torch.load(chain_graph_path)
+            #     else:
+            #         chain_graphs, relation2id, num_chain_relations = create_chain_graphs(raw_dataset, sentence1_key, sentence2_key)
+            #         # torch.save((chain_graphs, relation2id, num_chain_relations), chain_graph_path)
+            #     t1 = time.time()
+            #     print(f"Loaded Chain graphs in {t1-t0}sec!")
+
+            #     for split in chain_graphs.keys():
+            #         split_dir = os.path.join('resources', 'dgl_graphs', name, split, 'chain')
+            #         os.makedirs(split_dir, exist_ok=True)
+            #         for idx, graph in enumerate(chain_graphs[split]):
+            #             torch.save(graph, os.path.join(split_dir, f'{idx}.pt'))
+
+        num_sem_relations = 2
         def preprocess_function(examples):
             if sentence2_key is None:
                 texts = (list(map(lambda x: x.strip(), examples[sentence1_key])),)
@@ -338,28 +380,23 @@ def get_dataset(name, tokenizer, load_graphs=False):
                     continue
 
                 result = processed_datasets[split].to_dict()
-                
-                if split == 'validation':
-                    graph_key = 'dev'
-                elif split == 'validation_matched':
-                    graph_key = 'dev'
-                elif split == 'validation_mismatched':
-                    graph_key = 'dev2'
-                else:
-                    graph_key = split
 
-                sem_sent_a_masks, sem_sent_b_masks, sem_graphs_a, sem_graphs_b = process_graphs(semantic_graphs[graph_key], result, tokenizer, is_pair, 'semantic')
-                syn_sent_a_masks, syn_sent_b_masks, syn_graphs_a, syn_graphs_b = process_graphs(syntax_graphs[split], result, tokenizer, is_pair, 'syntax')
-                pos_sent_a_masks, pos_sent_b_masks, pos_graphs_a, pos_graphs_b = process_graphs(chain_graphs[split], result, tokenizer, is_pair, 'chain')
+                sem_sent_a_masks, sem_sent_b_masks, sem_graphs_a, sem_graphs_b = process_graphs(graphs[split]['dm'], result, tokenizer, is_pair, 'semantic')
+                syn_sent_a_masks, syn_sent_b_masks, syn_graphs_a, syn_graphs_b = process_graphs(graphs[split]['syntax'],, result, tokenizer, is_pair, 'syntax')
+                pos_sent_a_masks, pos_sent_b_masks, pos_graphs_a, pos_graphs_b = process_graphs(graphs[split]['chain'], result, tokenizer, is_pair, 'chain')
                 datasets[split] = SemanticDataset(
                     result['input_ids'],
                     result['attention_mask'],
                     result['token_type_ids'],
                     result['labels'],
                     [sem_sent_a_masks, syn_sent_a_masks, pos_sent_a_masks],
-                    [sem_sent_b_masks, syn_sent_b_masks, pos_sent_b_masks] if sentence2_key != None else None,
+                    [sem_sent_b_masks, syn_sent_b_masks, pos_sent_b_masks] if is_pair else None,
                     [sem_graphs_a, syn_graphs_a, pos_graphs_a],
-                    [sem_graphs_b, syn_graphs_b, pos_graphs_b] if sentence2_key != None else None,
+                    [sem_graphs_b, syn_graphs_b, pos_graphs_b] if is_pair else None,
+                    # [syn_sent_a_masks, pos_sent_a_masks],
+                    # [syn_sent_b_masks, pos_sent_b_masks] if sentence2_key != None else None,
+                    # [syn_graphs_a, pos_graphs_a],
+                    # [syn_graphs_b, pos_graphs_b] if sentence2_key != None else None,
                     num_graphs=3,
                 )
             processed_datasets = datasets
@@ -371,4 +408,4 @@ def get_dataset(name, tokenizer, load_graphs=False):
             pdb.set_trace()
 
         compute_metric = evaluate.load('glue', name)
-        return train_dataset, eval_dataset, compute_metric, num_labels, num_sem_relations
+        return train_dataset, eval_dataset, compute_metric, num_labels, 2

@@ -104,7 +104,7 @@ def create_syntax_graphs(dataset, sentence1_key, sentence2_key=None):
         subset = dataset[split]
         graphs[split] = []
         
-        for example in tqdm(subset):
+        for i, example in enumerate(tqdm(subset)):
 
             for key in [sentence1_key, sentence2_key]:
                 if key == None:
@@ -138,9 +138,9 @@ def create_syntax_graphs(dataset, sentence1_key, sentence2_key=None):
                     index = word.id - 1
                     head = word.head - 1
                     edge_list.append((head, index, relation2id[rel]))
-                    edge_list.append((index, head, max_rel + relation2id[rel]))
+                    edge_list.append((index, head, -relation2id[rel]))
 
-                if len(edge_list) == 0:
+                if num_nodes == 0:
                     g = DGLGraph()
                     g.gdata = {'metadata': metadata}
                     graphs[split].append(g)
@@ -148,7 +148,11 @@ def create_syntax_graphs(dataset, sentence1_key, sentence2_key=None):
                 
                 edge_list = sorted(edge_list, key=lambda x: (x[1], x[0], x[2]))
                 edge_list = np.array(edge_list, dtype=int)
-                edge_src, edge_dst, edge_type = edge_list.transpose()
+
+                if len(edge_list):
+                    edge_src, edge_dst, edge_type = edge_list.transpose()
+                else:
+                    edge_src, edge_dst, edge_type = np.array([]), np.array([]), np.array([])
 
                 # normalize by dst degree
                 _, inverse_index, count = np.unique((edge_dst, edge_type), axis=1, return_inverse=True, return_counts=True)

@@ -14,7 +14,7 @@ class SemanticDataset(Dataset):
 
     def __init__(self, input_ids, attention_mask, token_type_ids, labels, sent_a_masks, sent_b_masks, graphs_a, graphs_b, num_graphs=1):
         assert len(input_ids) == len(attention_mask) == len(token_type_ids) == len(labels) == len(sent_a_masks[0]) == len(graphs_a[0])
-        assert num_graphs == len(sent_a_masks) == len(graphs_a) 
+        # assert num_graphs == len(sent_a_masks) == len(graphs_a) 
         self.input_ids = input_ids
         self.attention_mask = attention_mask
         self.token_type_ids = token_type_ids
