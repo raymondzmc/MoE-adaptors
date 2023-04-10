@@ -385,7 +385,6 @@ def get_dataset(name, tokenizer, load_graphs=False):
                     continue
 
                 result = processed_datasets[split].to_dict()
-
                 sem_sent_a_masks, sem_sent_b_masks, sem_graphs_a, sem_graphs_b = process_graphs(graphs[split]['dm'], result, tokenizer, is_pair, 'semantic')
                 syn_sent_a_masks, syn_sent_b_masks, syn_graphs_a, syn_graphs_b = process_graphs(graphs[split]['syntax'], result, tokenizer, is_pair, 'syntax')
                 pos_sent_a_masks, pos_sent_b_masks, pos_graphs_a, pos_graphs_b = process_graphs(graphs[split]['chain'], result, tokenizer, is_pair, 'chain')
