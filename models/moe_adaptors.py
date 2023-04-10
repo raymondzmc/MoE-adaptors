@@ -19,14 +19,19 @@ def default(val, default_val):
 eps = 1e-9
 
 class SoftmaxGating(nn.Module):
-    def __init__(self, input_dim, num_gates):
+    def __init__(self, input_dim, num_gates, gate_type='softmax'):
         super().__init__()
         self.num_gates = num_gates
         self.w_gating = nn.Linear(input_dim, num_gates)
+        self.gate_type = gate_type
 
     def forward(self, x):
         raw_gates = self.w_gating(x.mean(1))
-        softmax_gates = raw_gates.softmax(dim=-1)
+
+        if self.gate_type == 'softmax':
+            softmax_gates = raw_gates.softmax(dim=-1)
+        elif self.gate_type == 'gumbel':
+            softmax_gates = F.gumbel_softmax(raw_gates, tau=1, hard=True, dim=-1)
         return softmax_gates
 
 class Expert(nn.Module):
@@ -82,6 +87,7 @@ class MoE_Adaptor(nn.Module):
         expert_type='mlp',
         num_relations=1,
         num_bases=80,
+        gate_type='softmax',
     ):
         super().__init__()
         
@@ -90,7 +96,7 @@ class MoE_Adaptor(nn.Module):
         self.num_experts = num_experts
         self.num_gnn_experts = 3
 
-        self.gate = SoftmaxGating(input_dim, num_gates=num_experts)
+        self.gate = SoftmaxGating(input_dim, num_gates=num_experts, gate_type=gate_type)
         
         output_dim = input_dim
         

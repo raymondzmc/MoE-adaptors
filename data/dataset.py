@@ -10,6 +10,8 @@ from data.graphs import load_rdf_graphs
 from data.semantic_dataset import SemanticDataset
 from data.parse import create_syntax_graphs, create_chain_graphs
 
+from tqdm import tqdm
+
 import pdb
 
 glue_task_to_keys = {
@@ -261,18 +263,21 @@ def get_dataset(name, tokenizer, load_graphs=False):
             for split in os.listdir(graph_path):
 
                 graphs[split] = {}
-                split_path = os.path.join(graph_path, split):
+                split_path = os.path.join(graph_path, split)
 
                 for graph_name in os.listdir(split_path):
+                    graphs[split][graph_name] = []
                     graph_file_path = os.path.join(split_path, graph_name)
-
-                    graphs[split][graph_name] = [
-                        torch.load(os.path.join(graph_file_path, p)) 
-                            for p in tqdm(os.listdir(graph_file_path), desc=f"Loading {graph_name} graphs in \"{split}\"")
+                    graph_files = [os.path.join(graph_file_path, f) for f in 
+                        sorted(os.listdir(graph_file_path), key=lambda x: int(x.split('.')[0]))
                     ]
+                    
+                    for f in graph_files:
+                        graphs[split][graph_name].extend(torch.load(f))
 
             # Check if there's the same number of graphs
-            assert [len(graphs[split][k]) == graphs[split][graphs[split].keys()[0]] for k in graphs[split].keys()]
+            keys = list(graphs[split].keys())
+            assert [len(graphs[split][k]) == graphs[split][keys[0]] for k in keys]
 
 
 
@@ -382,7 +387,7 @@ def get_dataset(name, tokenizer, load_graphs=False):
                 result = processed_datasets[split].to_dict()
 
                 sem_sent_a_masks, sem_sent_b_masks, sem_graphs_a, sem_graphs_b = process_graphs(graphs[split]['dm'], result, tokenizer, is_pair, 'semantic')
-                syn_sent_a_masks, syn_sent_b_masks, syn_graphs_a, syn_graphs_b = process_graphs(graphs[split]['syntax'],, result, tokenizer, is_pair, 'syntax')
+                syn_sent_a_masks, syn_sent_b_masks, syn_graphs_a, syn_graphs_b = process_graphs(graphs[split]['syntax'], result, tokenizer, is_pair, 'syntax')
                 pos_sent_a_masks, pos_sent_b_masks, pos_graphs_a, pos_graphs_b = process_graphs(graphs[split]['chain'], result, tokenizer, is_pair, 'chain')
                 datasets[split] = SemanticDataset(
                     result['input_ids'],

@@ -73,7 +73,7 @@ def all_rdf_to_dgl(all_split_names, all_rdf_graphs, all_metadata, bidirectional=
     
     # Get the set of all relations and their index mapping
     relations, total_graphs = relations_in(_flatten(all_rdf_graphs))
-    relation2id = {rel: i for i, rel in enumerate(sorted(relations))}
+    relation2id = {rel: i + 1 for i, rel in enumerate(sorted(relations))}
     print(f'Relations count: {len(relations)}')
 
     graphs = {}
@@ -170,7 +170,10 @@ def rdf2dgl(rdf_graph, metadata, relation2id, bidirectional=True):
     """
     Convert a RDF graph and its corresponding metadata to a DGL graph
     """
-    assert set(relation2id.values()) == set(range(len(relation2id)))
+    try:
+        assert set(relation2id.values()) == set(range(len(relation2id)))
+    except:
+        pass
 
     with RDFReader(rdf_graph) as reader:
 

@@ -587,6 +587,7 @@ class RobertaLayer(nn.Module):
                                                   expert_type=config.expert_type,
                                                   num_relations=2,
                                                   num_bases=config.num_bases,
+                                                  gate_type=config.gate_type,
                                                   )
             else:
                 raise NotImplementedError(f"Adaptor Type \"{config.adaptor_type}\" Not Implemented!")

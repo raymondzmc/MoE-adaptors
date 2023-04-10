@@ -3,6 +3,7 @@ import stanza
 import torch
 import numpy as np
 from dgl import DGLGraph
+import argparse
 from datasets import load_dataset, DatasetDict
 
 from tqdm import tqdm
@@ -60,10 +61,10 @@ def create_chain_graphs(dataset, sentence1_key, sentence2_key=None):
                         'anchor': [word.start_char, word.end_char],
                     })
                     if i < (num_nodes - 1):
-                        edge_list.append((i, i + 1, 0))
+                        edge_list.append((i, i + 1, -1))
                         edge_list.append((i + 1, i, 1))
 
-                if len(edge_list) == 0:
+                if num_nodes == 0:
                     g = DGLGraph()
                     g.gdata = {'metadata': metadata}
                     graphs[split].append(g)
@@ -71,7 +72,11 @@ def create_chain_graphs(dataset, sentence1_key, sentence2_key=None):
                 
                 edge_list = sorted(edge_list, key=lambda x: (x[1], x[0], x[2]))
                 edge_list = np.array(edge_list, dtype=int)
-                edge_src, edge_dst, edge_type = edge_list.transpose()
+
+                if len(edge_list):
+                    edge_src, edge_dst, edge_type = edge_list.transpose()
+                else:
+                    edge_src, edge_dst, edge_type = np.array([]), np.array([]), np.array([])
 
                 # normalize by dst degree
                 _, inverse_index, count = np.unique((edge_dst, edge_type), axis=1, return_inverse=True, return_counts=True)
@@ -88,7 +93,6 @@ def create_chain_graphs(dataset, sentence1_key, sentence2_key=None):
                 g.edata.update({'type': edge_type, 'norm': edge_norm})
                 g.gdata = {'metadata': metadata}
                 graphs[split].append(g)
-    
     return graphs, {'next': 0, 'prev': 1}, 2
 
 
@@ -97,7 +101,7 @@ def create_syntax_graphs(dataset, sentence1_key, sentence2_key=None):
 
     nlp = stanza.Pipeline(lang='en', processors='tokenize,mwt,pos,lemma,depparse', tokenize_pretokenized=True)
     relation2id = {}
-    relations_counter = 0
+    relations_counter = 1 # Since we are using negatives
     max_rel = 100
 
     for split in dataset.keys():
@@ -112,6 +116,7 @@ def create_syntax_graphs(dataset, sentence1_key, sentence2_key=None):
                 
                 
                 metadata = []
+                
                 doc = nlp(example[key])
                 
                 sentence = doc.sentences[0] # Assume single sentence input
@@ -173,16 +178,59 @@ def create_syntax_graphs(dataset, sentence1_key, sentence2_key=None):
     return graphs, relation2id, relations_counter
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-graph_types', default='all', choices=['all', 'syntax', 'chain']) 
+    parser.add_argument('-dataset', default='all', choices=list(glue_task_to_keys.keys()) + ['all']) 
+    parser.add_argument('-resource_dir', default='../resources/dgl_graphs') 
+    args = parser.parse_args()
+
+    os.makedirs(args.resource_dir, exist_ok=True)
+
     for task_name in glue_task_to_keys.keys():
+        task_dir = os.path.join(args.resource_dir, task_name)
+
+        if args.dataset != 'all' and task_name != args.dataset:
+            continue
+
         dataset = load_dataset("glue", task_name)
         sentence1_key, sentence2_key = glue_task_to_keys[task_name]
 
-        graphs, relation2id, num_relations = create_chain_graphs(dataset, sentence1_key, sentence1_key)
-        save_dir = f'../resources/glue_graphs/{glue_task_to_dirname[task_name]}/'
-        torch.save((graphs, relation2id, num_relations), os.path.join(save_dir, 'chain_graphs.pt'))
+        if args.graph_types in ['all', 'chain']:
+            graphs, relation2id, num_relations = create_chain_graphs(dataset, sentence1_key, sentence2_key)
 
-        # graphs, relation2id, num_relations = create_syntax_graphs(dataset, sentence1_key, sentence1_key)
-        # save_dir = f'../resources/glue_graphs/{glue_task_to_dirname[task_name]}/'
-        # torch.save((graphs, relation2id, num_relations), os.path.join(save_dir, 'syntax_graphs.pt'))
+            for split in graphs.keys():
+                save_path = os.path.join(task_dir, split, 'chain')
+                os.makedirs(save_path, exist_ok=True)
+                save_count = 0
+                batch_size = 100
+                for i in range(0, len(graphs[split]), batch_size):
+                    end = i + batch_size
+                    if end > len(graphs[split]):
+                        end = len(graphs[split])
+                    to_save = graphs[split][i:batch_size]
+                    _save_path = os.path.join(save_path, f'{save_count}.pt')
+                    try:
+                        torch.save(to_save, _save_path)
+                    except:
+                        pdb.set_trace()
+                    save_count += 1
+                    print(f"Saved {i}-{end} out of {len(graphs[split])}.")
+                print("Loaded and saved Chain graphs!")
+
+        if args.graph_types in ['all', 'syntax']:
+            graphs, relation2id, num_relations = create_syntax_graphs(dataset, sentence1_key, sentence2_key)
+
+            for split in graphs.keys():
+                save_path = os.path.join(task_dir, split, 'syntax')
+                os.makedirs(save_path, exist_ok=True)
+                save_count = 0
+                for i in range(0, len(graphs[split]), 1000):
+                    end = i + 1000
+                    if end > len(graphs[split]):
+                        end = len(graphs[split])
+                    torch.save(graphs[split][i:end], os.path.join(save_path, f'{save_count}.pt'))
+                    save_count += 1
+                    print(f"Saved {i}-{end} out of {len(graphs[split])}.")
+                print("Loaded and saved Syntax graphs!")
         
         

@@ -55,6 +55,7 @@ def main(args):
     config.ffn_bn=256 # ffn bottleneck dim
     config.adaptor_type = args.adator_type
     config.expert_type = args.expert_type
+    config.gate_type = args.gate_type
 
     # GNN arguments
     config.num_relations = num_relations
