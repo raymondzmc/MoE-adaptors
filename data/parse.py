@@ -185,6 +185,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     os.makedirs(args.resource_dir, exist_ok=True)
+    batch_size = 1000
 
     for task_name in glue_task_to_keys.keys():
         task_dir = os.path.join(args.resource_dir, task_name)
@@ -202,17 +203,12 @@ if __name__ == '__main__':
                 save_path = os.path.join(task_dir, split, 'chain')
                 os.makedirs(save_path, exist_ok=True)
                 save_count = 0
-                batch_size = 1000
+                
                 for i in range(0, len(graphs[split]), batch_size):
                     end = i + batch_size
                     if end > len(graphs[split]):
                         end = len(graphs[split])
-                    to_save = graphs[split][i:batch_size]
-                    _save_path = os.path.join(save_path, f'{save_count}.pt')
-                    try:
-                        torch.save(to_save, _save_path)
-                    except:
-                        pdb.set_trace()
+                    torch.save(graphs[split][i:end], os.path.join(save_path, f'{save_count}.pt'))
                     save_count += 1
                     print(f"Saved {i}-{end} out of {len(graphs[split])}.")
                 print("Loaded and saved Chain graphs!")
@@ -224,8 +220,8 @@ if __name__ == '__main__':
                 save_path = os.path.join(task_dir, split, 'syntax')
                 os.makedirs(save_path, exist_ok=True)
                 save_count = 0
-                for i in range(0, len(graphs[split]), 1000):
-                    end = i + 1000
+                for i in range(0, len(graphs[split]), batch_size):
+                    end = i + batch_size
                     if end > len(graphs[split]):
                         end = len(graphs[split])
                     torch.save(graphs[split][i:end], os.path.join(save_path, f'{save_count}.pt'))
