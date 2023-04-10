@@ -202,7 +202,7 @@ if __name__ == '__main__':
                 save_path = os.path.join(task_dir, split, 'chain')
                 os.makedirs(save_path, exist_ok=True)
                 save_count = 0
-                batch_size = 100
+                batch_size = 1000
                 for i in range(0, len(graphs[split]), batch_size):
                     end = i + batch_size
                     if end > len(graphs[split]):
