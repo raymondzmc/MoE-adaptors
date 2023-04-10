@@ -125,7 +125,10 @@ class SemanticDataset(Dataset):
         all_gdata = []
         num_graphs = len(graphs[0])
         for i in range(num_graphs):
-            batched_graphs = dgl.batch([g[i] for g in graphs])
+            try:
+                batched_graphs = dgl.batch([g[i] for g in graphs])
+            except:
+                pdb.set_trace()
             gdata = [g[i].gdata for g in graphs]
             gdata = SemanticDataset._pad_and_stack_gdata(gdata)
             all_batched_graphs.append(batched_graphs)
