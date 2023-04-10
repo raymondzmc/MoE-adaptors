@@ -111,7 +111,6 @@ class RGCN(nn.Module):
         
         graph = graph.to(node_embeddings.device)
         for layer in self.layers:
-            pdb.set_trace()
             types = torch.zeros_like(graph.edata['type'])
             types[graph.edata['type'] < 0] = 1
             graph.edata['type'] = types
