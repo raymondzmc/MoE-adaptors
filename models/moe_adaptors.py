@@ -31,7 +31,7 @@ class SoftmaxGating(nn.Module):
         if self.gate_type == 'softmax':
             softmax_gates = raw_gates.softmax(dim=-1)
         elif self.gate_type == 'gumbel':
-            softmax_gates = F.gumbel_softmax(raw_gates, tau=1, hard=True, dim=-1)
+            softmax_gates = F.gumbel_softmax(raw_gates, tau=1, hard=False, dim=-1)
         return softmax_gates
 
 class Expert(nn.Module):
@@ -91,8 +91,8 @@ class MoE_Adaptor(nn.Module):
     ):
         super().__init__()
         
-        self.down_proj = nn.Linear(input_dim, hidden_dim)
-        self.up_proj = nn.Linear(hidden_dim, input_dim)
+        # self.down_proj = nn.Linear(input_dim, hidden_dim)
+        # self.up_proj = nn.Linear(hidden_dim, input_dim)
         self.num_experts = num_experts
         self.num_gnn_experts = 3
 
@@ -103,9 +103,9 @@ class MoE_Adaptor(nn.Module):
         if expert_type == 'mlp':
             self.experts = nn.ModuleList([
                 Expert(
-                    hidden_dim,
+                    input_dim,
                     hidden_dim=hidden_dim,
-                    output_dim=hidden_dim,
+                    output_dim=output_dim,
                     activation=activation,
                     adapter_scalar=adapter_scalar,
                     dropout=dropout,
@@ -114,9 +114,9 @@ class MoE_Adaptor(nn.Module):
         elif expert_type == 'gnn':
             self.experts = nn.ModuleList([
                 RGCN(
+                    input_dim,
                     hidden_dim,
-                    hidden_dim,
-                    hidden_dim,
+                    output_dim,
                     num_relations=num_relations,
                     num_bases=num_bases,
                     num_hidden_layers=1,
@@ -124,9 +124,9 @@ class MoE_Adaptor(nn.Module):
                     activation=activation,
                 ) if i < self.num_gnn_experts else 
                 Expert(
-                    hidden_dim,
+                    input_dim,
                     hidden_dim=hidden_dim,
-                    output_dim=hidden_dim,
+                    output_dim=output_dim,
                     activation=activation,
                     adapter_scalar=adapter_scalar,
                     dropout=dropout,
@@ -138,27 +138,23 @@ class MoE_Adaptor(nn.Module):
     def forward(self, x, add_residual=False, residual=None, graphs=None):
         
         gates = self.gate(x)
-        x = self.down_proj(x)
+        # x = self.down_proj(x)
         # t0 = time.time()
         
         # t1 = time.time()
         # print(f"Gate: {t1-t0}")
         experts_output = []
         for i, expert in enumerate(self.experts):
-            # t0  = time.time()
             g = graphs[i] if graphs != None and i < self.num_gnn_experts else None
             out = expert(x, add_residual=add_residual, residual=residual, graphs=g)
-            # t1 = time.time()
             experts_output.append(out)
-            # print(f"Expert {i}: {t1-t0}")
+
         # experts_output = torch.stack([
         #     expert(x, add_residual=add_residual, residual=residual, graphs=graphs) for expert in self.experts
         # ]).permute(1, 0, 2, 3) # batch, expert, sequence_len, hidden
-        # return experts_output.squeeze(1)
-        # pdb.set_trace()
         output = (gates.unsqueeze(-1).unsqueeze(-1) * torch.stack(experts_output).permute(1, 0, 2, 3)).sum(1)
         # output = gates.unsqueeze(-1).unsqueeze(-1) * experts_output.sum(1)
-        output = self.up_proj(output)
+        # output = self.up_proj(output)
         # # bz, n_experts, seq_len, h = output.shape
         # # output = output.permute(0, 2, 1, 3).reshape(bz, seq_len, n_experts * h)
         return output, gates

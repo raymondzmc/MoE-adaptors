@@ -8,10 +8,10 @@ import pdb, time
 class RGCN(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_relations, num_bases, num_hidden_layers=1, dropout=0.1, activation=nn.ReLU):
         super().__init__()
-        # self.down_proj = nn.Linear(input_dim, hidden_dim)
+        self.down_proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList()
         self.activation = activation()
-        # self.up_proj = nn.Linear(hidden_dim, output_dim)
+        self.up_proj = nn.Linear(hidden_dim, output_dim)
 
         # Initialize GNN layers
         for i in range(num_hidden_layers + 1):
@@ -38,7 +38,7 @@ class RGCN(nn.Module):
             )
 
     def forward(self, x, graphs, add_residual=False, residual=None):
-        # x = self.down_proj(x)
+        x = self.down_proj(x)
         sent_a_masks = graphs['sent_a_masks']
         graphs_a = graphs['graphs_a']
         gdata_a = graphs['gdata_a']
@@ -74,7 +74,9 @@ class RGCN(nn.Module):
             indice_pairs_a = gdata_a['wpidx2graphid'][i].nonzero().tolist()
             graph_indices_a = [x[1] for x in indice_pairs_a]
             wp_indices_a = [x[0] for x in indice_pairs_a]
+            sent_a_masks[0].nonzero().squeeze().tolist()
             sent_a_indices = sent_a_masks[i].nonzero().squeeze().tolist()
+            sent_a_indices = sent_a_indices if isinstance(sent_a_indices, list) else [sent_a_indices]
             wp_indices_a = [sent_a_indices[x] for x in wp_indices_a]
             for wp_idx, graph_idx in zip(wp_indices_a, graph_indices_a):
                 x_indices[wp_idx] = x.shape[1] + graph_idx
@@ -93,7 +95,7 @@ class RGCN(nn.Module):
             select_indices.append(x_indices)
         
         out = torch.stack([concatenated_rep[i][idx] for i, idx in enumerate(select_indices)])
-        # out = self.up_proj(out)
+        out = self.up_proj(out)
 
         return out
     
