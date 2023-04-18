@@ -86,6 +86,7 @@ class RGCN(nn.Module):
                 graph_indices_b = [x[1] for x in indice_pairs_b]
                 wp_indices_b = [x[0] for x in indice_pairs_b]
                 sent_b_indices = sent_b_masks[i].nonzero().squeeze().tolist()
+                sent_b_indices = sent_b_indices if isinstance(sent_b_indices, list) else [sent_b_indices]
                 wp_indices_b = [sent_b_indices[x] for x in wp_indices_b]
                 for wp_idx, graph_idx in zip(wp_indices_b, graph_indices_b):
                     x_indices[wp_idx] = x.shape[1] + node_embs_a.shape[1] + graph_idx

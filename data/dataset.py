@@ -176,11 +176,10 @@ def batch_graphs(graphs):
     batched_graphs = dgl.batch(graphs)
     gdata = _pad_and_stack_gdata([g.gdata for g in graphs])
 
-
-def process_graphs(graphs, result, tokenizer, is_pair=False, name=None):
+def process_graphs(graphs, result, tokenizer, is_pair=False, name=None, cls_root=False):
     n_examples = len(result['input_ids'])
     sent_a_masks, sent_b_masks, graphs_a, graphs_b = [], [], [], []
-    for idx in range(n_examples):
+    for idx in tqdm(range(n_examples), desc=f'Processing \"{name}\" graph'):
         inputs = {k: result[k][idx] for k in result if k != "offset_mapping"}
         all_special_token_ids = {tokenizer.bos_token_id, tokenizer.eos_token_id, tokenizer.sep_token_id, tokenizer.cls_token_id}
         wp_offsets = result["offset_mapping"][idx]
@@ -217,10 +216,13 @@ def process_graphs(graphs, result, tokenizer, is_pair=False, name=None):
             wpidx2graphid = torch.tensor(_calc_wpidx2graphid(anchors, wp_offsets), dtype=torch.bool)  # (n_wp, n_nodes)
             if wpidx2graphid.shape[-1] != graph.batch_num_nodes().item():
                 pdb.set_trace()
-            
             graph.gdata['wpidx2graphid'] = wpidx2graphid # TODO: if we really want to have some fun we can make this a sparse tensor
             del graph.gdata['metadata']  # save memory
-        
+
+            # Add an edge from original root to CLS (first token)
+            if cls_root:
+                pass
+
         sent_a_masks.append(sent_a_mask)
         graphs_a.append(graph_a)
 
@@ -261,6 +263,8 @@ def get_dataset(name, tokenizer, load_graphs=False):
             graphs = {}
 
             for split in os.listdir(graph_path):
+                if split not in ['train', 'validation']:
+                    continue
 
                 graphs[split] = {}
                 split_path = os.path.join(graph_path, split)
@@ -278,70 +282,6 @@ def get_dataset(name, tokenizer, load_graphs=False):
             # Check if there's the same number of graphs
             keys = list(graphs[split].keys())
             assert [len(graphs[split][k]) == graphs[split][keys[0]] for k in keys]
-
-
-
-            
-            # TO DO: only load train and dev to save time
-            # load_semantic_graph = True
-            # if load_semantic_graph:
-            #     has_secondary_split = False
-
-            #     # semantic_graphs, relation2id, num_sem_relations = load_rdf_graphs(path, 'dm', has_secondary_split)
-
-            #     for split in semantic_graphs.keys():
-            #         split_dir = os.path.join('resources', 'dgl_graphs', name, split, 'dm')
-            #         os.makedirs(split_dir, exist_ok=True)
-            #         for idx, graph in enumerate(semantic_graphs[split]):
-            #             torch.save(graph, os.path.join(split_dir, f'{idx}.pt'))
-
-                # semantic_graph_path = os.path.join(path, 'semantic_graphs.pt')
-                # if os.path.exists(semantic_graph_path):
-                #     syntax_graphs, relation2id, num_syn_relations = torch.load(semantic_graph_path)
-                # else:
-                #     has_secondary_split = (name == 'mnli')
-                #     has_secondary_split = False
-                #     semantic_graphs, relation2id, num_sem_relations = load_rdf_graphs(path, 'dm', has_secondary_split)
-                #     pdb.set_trace()
-                #     torch.save((semantic_graphs, relation2id, num_sem_relations), semantic_graph_path)
-                # print("Loaded Semantic graphs!")
-
-            # load_syntax_graph = True
-            # if load_syntax_graph:
-            #     syntax_graph_path = os.path.join(path, 'syntax_graphs.pt')
-            #     t0 = time.time()
-            #     if os.path.exists(syntax_graph_path):
-            #         syntax_graphs, relation2id, num_syn_relations = torch.load(syntax_graph_path)
-            #     else:
-            #         syntax_graphs, relation2id, num_syn_relations = create_syntax_graphs(raw_dataset, sentence1_key, sentence2_key)
-            #         # torch.save((syntax_graphs, relation2id, num_sem_relations), syntax_graph_path)
-            #     t1 = time.time()
-            #     print(f"Loaded Syntax graphs in {t1-t0}sec!")
-
-            #     for split in syntax_graphs.keys():
-            #         split_dir = os.path.join('resources', 'dgl_graphs', name, split, 'syntax')
-            #         os.makedirs(split_dir, exist_ok=True)
-            #         for idx, graph in enumerate(syntax_graphs[split]):
-            #             torch.save(graph, os.path.join(split_dir, f'{idx}.pt'))
-
-
-            # load_chain_graph = True
-            # if load_chain_graph:
-            #     chain_graph_path = os.path.join(path, 'chain_graphs.pt')
-            #     t0 = time.time()
-            #     if os.path.exists(chain_graph_path):
-            #         chain_graphs, relation2id, num_chain_relations = torch.load(chain_graph_path)
-            #     else:
-            #         chain_graphs, relation2id, num_chain_relations = create_chain_graphs(raw_dataset, sentence1_key, sentence2_key)
-            #         # torch.save((chain_graphs, relation2id, num_chain_relations), chain_graph_path)
-            #     t1 = time.time()
-            #     print(f"Loaded Chain graphs in {t1-t0}sec!")
-
-            #     for split in chain_graphs.keys():
-            #         split_dir = os.path.join('resources', 'dgl_graphs', name, split, 'chain')
-            #         os.makedirs(split_dir, exist_ok=True)
-            #         for idx, graph in enumerate(chain_graphs[split]):
-            #             torch.save(graph, os.path.join(split_dir, f'{idx}.pt'))
 
         num_sem_relations = 2
         def preprocess_function(examples):
@@ -379,12 +319,15 @@ def get_dataset(name, tokenizer, load_graphs=False):
         if load_graphs:
             is_pair = sentence2_key is not None
             datasets = {}
-            
             for split in processed_datasets.keys():
                 if split not in ['train', 'validation', 'validation_matched']:
                     continue
 
+
                 result = processed_datasets[split].to_dict()
+                if split == 'validation_matched':
+                    split = 'validation'
+
                 sem_sent_a_masks, sem_sent_b_masks, sem_graphs_a, sem_graphs_b = process_graphs(graphs[split]['dm'], result, tokenizer, is_pair, 'semantic')
                 syn_sent_a_masks, syn_sent_b_masks, syn_graphs_a, syn_graphs_b = process_graphs(graphs[split]['syntax'], result, tokenizer, is_pair, 'syntax')
                 pos_sent_a_masks, pos_sent_b_masks, pos_graphs_a, pos_graphs_b = process_graphs(graphs[split]['chain'], result, tokenizer, is_pair, 'chain')
@@ -406,10 +349,11 @@ def get_dataset(name, tokenizer, load_graphs=False):
             processed_datasets = datasets
 
         train_dataset = processed_datasets["train"]
-        try:
-            eval_dataset = processed_datasets["validation_matched" if name == "mnli" else "validation"]
-        except:
-            pdb.set_trace()
+        eval_dataset = processed_datasets["validation"]
+        # try:
+        #     eval_dataset = processed_datasets["validation_matched" if name == "mnli" else "validation"]
+        # except:
+        #     pdb.set_trace()
 
         compute_metric = evaluate.load('glue', name)
         return train_dataset, eval_dataset, compute_metric, num_labels, 2

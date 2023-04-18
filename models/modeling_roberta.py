@@ -588,6 +588,7 @@ class RobertaLayer(nn.Module):
                                                   num_relations=2,
                                                   num_bases=config.num_bases,
                                                   gate_type=config.gate_type,
+                                                  tau=config.tau
                                                   )
             else:
                 raise NotImplementedError(f"Adaptor Type \"{config.adaptor_type}\" Not Implemented!")
@@ -604,6 +605,7 @@ class RobertaLayer(nn.Module):
         output_gates=False,
         prefix_state=None,
         graphs=None,
+        tau=None,
     ):
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
         self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
@@ -649,7 +651,7 @@ class RobertaLayer(nn.Module):
             present_key_value = present_key_value + cross_attn_present_key_value
 
         layer_output, gates = apply_chunking_to_forward(
-            lambda x: self.feed_forward_chunk(x, graphs=graphs), self.chunk_size_feed_forward, self.seq_len_dim, attention_output,
+            lambda x: self.feed_forward_chunk(x, graphs=graphs, tau=tau), self.chunk_size_feed_forward, self.seq_len_dim, attention_output,
         )
         outputs = (layer_output,) + outputs
 
@@ -663,9 +665,9 @@ class RobertaLayer(nn.Module):
 
         return outputs
 
-    def feed_forward_chunk(self, attention_output, graphs=None):
+    def feed_forward_chunk(self, attention_output, graphs=None, tau=None):
         if self.config.ffn_mode == 'adapter' and self.config.ffn_option == 'parallel':
-            adapter_change, gates = self.ef_ffn_adapter(attention_output, add_residual=False, graphs=graphs)
+            adapter_change, gates = self.ef_ffn_adapter(attention_output, add_residual=False, graphs=graphs, tau=tau)
         else:
             adapter_change = None
 
@@ -696,6 +698,7 @@ class RobertaEncoder(nn.Module):
         return_dict=True,
         prefix_state=None,
         graphs=None,
+        tau=None,
     ):
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
@@ -750,6 +753,7 @@ class RobertaEncoder(nn.Module):
                     output_gates,
                     prefix_state=prefix_state[i] if isinstance(prefix_state, list) else prefix_state,
                     graphs=graphs,
+                    tau=tau,
                 )
 
             hidden_states = layer_outputs[0]
@@ -989,6 +993,7 @@ class RobertaModel(RobertaPreTrainedModel):
         return_dict=None,
         prefix_state=None,
         graphs=None,
+        tau=None,
     ):
         r"""
         encoder_hidden_states  (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
@@ -1091,6 +1096,7 @@ class RobertaModel(RobertaPreTrainedModel):
             return_dict=return_dict,
             prefix_state=prefix_state,
             graphs=graphs,
+            tau=tau,
         )
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
@@ -1414,6 +1420,7 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
         return_dict=None,
         prefix_state=None,
         graphs=None,
+        tau=None,
     ):
         r"""
         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
@@ -1435,6 +1442,7 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
             return_dict=return_dict,
             prefix_state=prefix_state,
             graphs=graphs,
+            tau=tau,
         )
         sequence_output = outputs[0]
         logits = self.classifier(sequence_output)
@@ -1668,15 +1676,23 @@ class RobertaClassificationHead(nn.Module):
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.out_proj = nn.Linear(config.hidden_size, config.num_labels)
+        self.pooling_method = config.pooling_method
 
     def forward(self, features, **kwargs):
-        x = features[:, 0, :]  # take <s> token (equiv. to [CLS])
+
+        if self.pooling_method == 'mean':
+            x = features.mean(1)
+        elif self.pooling_method == 'cls':
+            x = features[:, 0, :]  # take <s> token (equiv. to [CLS])
+
         x = self.dropout(x)
         x = self.dense(x)
         x = torch.tanh(x)
         x = self.dropout(x)
         x = self.out_proj(x)
         return x
+
+
 
 
 @add_start_docstrings(

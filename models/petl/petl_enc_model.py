@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 from models.petl.petl_factory import Prefix, MLP_Bias, Bias, PrefixDirectInit, PrefixCrossAttn
 from transformers.utils import logging
 logger = logging.get_logger(__name__)
+import pdb
 
 
 # attn_mode="prefix"
@@ -52,36 +53,38 @@ class PETLEncModel(PreTrainedModel):
 
         logger.info("Declare PrefixTuning model!")
 
-        not_freeze_set = []
-        if args.unfreeze_params != 'none' and args.attn_mode != 'bitfit':
-            if args.unfreeze_params == 'LN':
-                # not_freeze_set = ['layernorm']  # input layernorm
-                not_freeze_set = ['attn_layer_norm']  # only optimize layer norm after attn
-            else:
-                not_freeze_set = args.unfreeze_params.split(',')
-            all_match = False
-        elif args.attn_mode == 'bitfit':
-            not_freeze_set = ['bias']
-            all_match = True
+        if args.freeze_plm:        
+            not_freeze_set = []
+            if args.unfreeze_params != 'none' and args.attn_mode != 'bitfit':
+                if args.unfreeze_params == 'LN':
+                    # not_freeze_set = ['layernorm']  # input layernorm
+                    not_freeze_set = ['attn_layer_norm']  # only optimize layer norm after attn
+                else:
+                    not_freeze_set = args.unfreeze_params.split(',')
+                all_match = False
+            elif args.attn_mode == 'bitfit':
+                not_freeze_set = ['bias']
+                all_match = True
 
-        logger.info(not_freeze_set)
+            logger.info(not_freeze_set)
 
-        freeze_set = []
-        if args.ffn_mode == 'mh_adapter_random' or args.attn_option == 'mh_adapter':
-            # freeze the random mapping matrix
-            freeze_set = ['freeze_q_proj']
+            freeze_set = []
+            if args.ffn_mode == 'mh_adapter_random' or args.attn_option == 'mh_adapter':
+                # freeze the random mapping matrix
+                freeze_set = ['freeze_q_proj']
 
-        for n, p in self.pretrained_model.named_parameters():
-            if len(not_freeze_set) > 0 and self.check_params(n, not_freeze_set, all_match=all_match):
-                print("tune "+ n)
-                p.requires_grad = True
-            else:
-                p.requires_grad = False
+            for n, p in self.pretrained_model.named_parameters():
+                if len(not_freeze_set) > 0 and self.check_params(n, not_freeze_set, all_match=all_match):
+                    print("tune "+ n)
+                    p.requires_grad = True
+                else:
+                    p.requires_grad = False
 
-            if len(freeze_set) > 0 and self.check_params(n, freeze_set, all_match=False):
-                p.requires_grad = False
+                if len(freeze_set) > 0 and self.check_params(n, freeze_set, all_match=False):
+                    p.requires_grad = False
 
-        logger.info("already freezed parameters!")
+
+            logger.info("already freezed parameters!")
 
     def check_params(self, module_name, safe_list, all_match=True):
         check = [partial_name in module_name for partial_name in safe_list]
@@ -121,6 +124,7 @@ class PETLEncModel(PreTrainedModel):
                 output_gates=None,
                 return_dict=None,
                 graphs=None,
+                tau=None,
                 ):
 
         bsz = input_ids.shape[0]
@@ -139,5 +143,6 @@ class PETLEncModel(PreTrainedModel):
                                     return_dict=return_dict,
                                     prefix_state=prefix_state,
                                     graphs=graphs,
+                                    tau=tau,
                                     )
         return output

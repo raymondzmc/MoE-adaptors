@@ -306,6 +306,9 @@ class Trainer:
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        initial_tau: Optional[float] = 1,
+        terminal_tau: Optional[float] = 0.1,
+        tau_decay: Optional[bool] = False,
     ):
         if args is None:
             output_dir = "tmp_trainer"
@@ -643,6 +646,11 @@ class Trainer:
         # torch.compile
         if args.torch_compile and not is_torch_compile_available():
             raise RuntimeError("Using torch.compile requires a nighly install of PyTorch.")
+        
+        # For gumbel softmax
+        self.initial_tau = initial_tau
+        self.terminal_tau = terminal_tau
+        self.tau_decay = tau_decay
 
     def add_callback(self, callback):
         """
@@ -1661,6 +1669,7 @@ class Trainer:
         epochs_trained = 0
         steps_trained_in_current_epoch = 0
         steps_trained_progress_bar = None
+        total_steps_trained = 0
 
         # Check if continuing training from a checkpoint
         if resume_from_checkpoint is not None and os.path.isfile(
@@ -1762,7 +1771,11 @@ class Trainer:
             step = -1
             epoch_loss = 0.
             for step, inputs in enumerate(epoch_iterator):
-
+                if self.tau_decay:
+                    tau = self.initial_tau - (total_steps_trained * ((self.initial_tau - self.terminal_tau) / (num_train_epochs * steps_in_epoch)))
+                    inputs['tau'] = tau
+                else:
+                    inputs['tau'] = self.initial_tau
                 # Skip past any already trained steps if resuming training
                 if steps_trained_in_current_epoch > 0:
                     steps_trained_in_current_epoch -= 1
@@ -1872,6 +1885,7 @@ class Trainer:
 
                 if self.control.should_epoch_stop or self.control.should_training_stop:
                     break
+                total_steps_trained += 1
 
             print("Epoch Loss:", epoch_loss.item())
 
@@ -1935,6 +1949,7 @@ class Trainer:
 
         # Delete the last checkpoint when save_total_limit=1 if it's different from the best checkpoint and process allowed to save.
         if self.args.should_save and self.state.best_model_checkpoint is not None and self.args.save_total_limit == 1:
+            pdb.set_trace()
             for checkpoint in checkpoints_sorted:
                 if checkpoint != self.state.best_model_checkpoint:
                     logger.info(f"Deleting older checkpoint [{checkpoint}] due to args.save_total_limit")

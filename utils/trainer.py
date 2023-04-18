@@ -8,6 +8,7 @@ def get_trainer_arguments(args):
     """
     training_args = TrainingArguments(
         output_dir=args.output_dir,
+        logging_dir=args.output_dir,
         overwrite_output_dir=True,
         do_train=args.do_train,
         do_eval=True,
@@ -30,7 +31,7 @@ def get_trainer_arguments(args):
         run_name='',
         disable_tqdm=False,
         remove_unused_columns=True,
-        load_best_model_at_end=True,
+        save_total_limit=args.save_total_limit
     )
 
     return training_args

@@ -213,6 +213,13 @@ class TuneArguments:
         },
     )
 
+    freeze_plm: Optional[bool] = field(
+        default="cls",
+        metadata={
+            "help": "freeze PLM parameters",
+        },
+    )
+
 @dataclass
 class MBARTArguments:
     """

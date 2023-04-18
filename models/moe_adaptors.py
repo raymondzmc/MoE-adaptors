@@ -19,19 +19,45 @@ def default(val, default_val):
 eps = 1e-9
 
 class SoftmaxGating(nn.Module):
-    def __init__(self, input_dim, num_gates, gate_type='softmax'):
+    def __init__(self, input_dim, num_gates, gate_type='softmax', tau=1):
         super().__init__()
         self.num_gates = num_gates
         self.w_gating = nn.Linear(input_dim, num_gates)
-        self.gate_type = gate_type
 
-    def forward(self, x):
+        # if gate_type == 'gumbel':
+        #     self.
+        self.gate_type = gate_type
+        self.tau = tau
+
+    def forward(self, x, tau=None):
         raw_gates = self.w_gating(x.mean(1))
 
         if self.gate_type == 'softmax':
             softmax_gates = raw_gates.softmax(dim=-1)
         elif self.gate_type == 'gumbel':
-            softmax_gates = F.gumbel_softmax(raw_gates, tau=1, hard=False, dim=-1)
+            if tau == None:
+                tau = self.tau
+            softmax_gates = F.gumbel_softmax(raw_gates, tau=tau, hard=False, dim=-1)
+        return softmax_gates
+
+class HardConcreteGating(nn.Module):
+    def __init__(self, input_dim, num_gates, gate_type='softmax', tau=1):
+        super().__init__()
+        self.num_gates = num_gates
+        self.w_gating = nn.Linear(input_dim, num_gates)
+        
+        self.gate_type = gate_type
+        self.tau = tau
+
+    def forward(self, x, tau=None):
+        raw_gates = self.w_gating(x)
+
+        if self.gate_type == 'softmax':
+            softmax_gates = raw_gates.softmax(dim=-1)
+        elif self.gate_type == 'gumbel':
+            if tau == None:
+                tau = self.tau
+            softmax_gates = F.gumbel_softmax(raw_gates, tau=tau, hard=False, dim=-1)
         return softmax_gates
 
 class Expert(nn.Module):
@@ -88,6 +114,7 @@ class MoE_Adaptor(nn.Module):
         num_relations=1,
         num_bases=80,
         gate_type='softmax',
+        tau=1.0,
     ):
         super().__init__()
         
@@ -95,8 +122,8 @@ class MoE_Adaptor(nn.Module):
         # self.up_proj = nn.Linear(hidden_dim, input_dim)
         self.num_experts = num_experts
         self.num_gnn_experts = 3
-
-        self.gate = SoftmaxGating(input_dim, num_gates=num_experts, gate_type=gate_type)
+        self.gate_logits = nn.Parameter(torch.zeros(self.num_experts))
+        # self.gate = SoftmaxGating(input_dim, num_gates=num_experts, gate_type=gate_type, tau=tau)
         
         output_dim = input_dim
         
@@ -135,9 +162,9 @@ class MoE_Adaptor(nn.Module):
         else:
             raise NotImplementedError(f"Expert type \"{expert_type}\" not implemented!")
 
-    def forward(self, x, add_residual=False, residual=None, graphs=None):
+    def forward(self, x, add_residual=False, residual=None, graphs=None, tau=None, one_hot_gate=True):
         
-        gates = self.gate(x)
+        
         # x = self.down_proj(x)
         # t0 = time.time()
         
@@ -149,12 +176,36 @@ class MoE_Adaptor(nn.Module):
             out = expert(x, add_residual=add_residual, residual=residual, graphs=g)
             experts_output.append(out)
 
+        # F.gumbel_softmax(experts_output)
+        # experts_output = self.gate(experts_output.permute(1, 0, 2, 3))
+        # pdb.set_trace()
+        if self.training:
+            batch_size = x.shape[0]
+            expanded_gate_logits = self.gate_logits.unsqueeze(1).expand(-1, batch_size)
+            gates = F.gumbel_softmax(expanded_gate_logits, tau=tau, hard=False, dim=0)[:, :, None, None]
+        else:
+            
+            # Take the expert with the single highest probability
+            if one_hot_gate:
+                arg_max = torch.argmax(self.gate_logits)
+                one_hot = torch.zeros_like(self.gate_logits)
+                one_hot[arg_max] = 1
+                gates = one_hot[:, None, None, None]
+            else:
+                gates = self.gate_logits.softmax(dim=0)[:, None, None, None]
+                # gates = self.gate.softmax(dim=-1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
+                # print(self.gate, gates[0, 0, 0].tolist())
+                # gates = F.gumbel_softmax(self.gate, tau=tau, hard=True, dim=-1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
+        output = (torch.stack(experts_output) * gates).sum(0)
+        
+        # print(tau)
+        # gates = self.gate(experts_output tau=tau, hard=False, dim=-1)
         # experts_output = torch.stack([
         #     expert(x, add_residual=add_residual, residual=residual, graphs=graphs) for expert in self.experts
         # ]).permute(1, 0, 2, 3) # batch, expert, sequence_len, hidden
-        output = (gates.unsqueeze(-1).unsqueeze(-1) * torch.stack(experts_output).permute(1, 0, 2, 3)).sum(1)
+        # output = (gates.unsqueeze(-1) * experts_output).sum(1)
         # output = gates.unsqueeze(-1).unsqueeze(-1) * experts_output.sum(1)
         # output = self.up_proj(output)
         # # bz, n_experts, seq_len, h = output.shape
         # # output = output.permute(0, 2, 1, 3).reshape(bz, seq_len, n_experts * h)
-        return output, gates
+        return output, gates.detach()

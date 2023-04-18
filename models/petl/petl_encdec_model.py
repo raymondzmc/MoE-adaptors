@@ -33,35 +33,35 @@ class PETLEncDecModel(PreTrainedModel):
             raise ValueError
 
         logger.info("Declare PrefixTuning model!")
+        if args.freeze_plm:
+            not_freeze_set = []
+            if args.unfreeze_params != 'none' and args.attn_mode != 'bitfit':
+                if args.unfreeze_params == 'LN':
+                    # not_freeze_set = ['layernorm']  # input layernorm
+                    not_freeze_set = ['attn_layer_norm']  # only optimize layer norm after attn
+                else:
+                    not_freeze_set = args.unfreeze_params.split(',')
+                all_match = False
+            elif args.attn_mode == 'bitfit':
+                not_freeze_set = ['bias']
+                all_match = True
 
-        not_freeze_set = []
-        if args.unfreeze_params != 'none' and args.attn_mode != 'bitfit':
-            if args.unfreeze_params == 'LN':
-                # not_freeze_set = ['layernorm']  # input layernorm
-                not_freeze_set = ['attn_layer_norm']  # only optimize layer norm after attn
-            else:
-                not_freeze_set = args.unfreeze_params.split(',')
-            all_match = False
-        elif args.attn_mode == 'bitfit':
-            not_freeze_set = ['bias']
-            all_match = True
+            logger.info(not_freeze_set)
 
-        logger.info(not_freeze_set)
+            freeze_set = []
+            if args.ffn_mode == 'mh_adapter_random' or args.attn_option == 'mh_adapter':
+                # freeze the random mapping matrix
+                freeze_set = ['freeze_q_proj']
 
-        freeze_set = []
-        if args.ffn_mode == 'mh_adapter_random' or args.attn_option == 'mh_adapter':
-            # freeze the random mapping matrix
-            freeze_set = ['freeze_q_proj']
+            for n, p in self.pretrained_model.named_parameters():
+                if len(not_freeze_set) > 0 and self.check_params(n, not_freeze_set, all_match=all_match):
+                    print("tune "+ n)
+                    p.requires_grad = True
+                else:
+                    p.requires_grad = False
 
-        for n, p in self.pretrained_model.named_parameters():
-            if len(not_freeze_set) > 0 and self.check_params(n, not_freeze_set, all_match=all_match):
-                print("tune "+ n)
-                p.requires_grad = True
-            else:
-                p.requires_grad = False
-
-            if len(freeze_set) > 0 and self.check_params(n, freeze_set, all_match=False):
-                p.requires_grad = False
+                if len(freeze_set) > 0 and self.check_params(n, freeze_set, all_match=False):
+                    p.requires_grad = False
 
         # num_params_seq2seq = sum([p.numel() for n, p in self.seq2seq_model.named_parameters()])
         # num_params_pt = sum([p.numel() for n, p in self.seq2seq_model.named_parameters() if p.requires_grad])
