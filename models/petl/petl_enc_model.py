@@ -111,6 +111,10 @@ class PETLEncModel(PreTrainedModel):
     def get_fake_prompt(self, bsz, nsamples=-1):
         return None
 
+    def prune_gates(self):
+        for index in range(len(self.pretrained_model.roberta.encoder.layer)):
+            self.pretrained_model.roberta.encoder.layer[index].ef_ffn_adapter.remove_experts()
+
     def forward(self,
                 input_ids=None,
                 attention_mask=None,
@@ -129,7 +133,6 @@ class PETLEncModel(PreTrainedModel):
 
         bsz = input_ids.shape[0]
         prefix_state = self.get_prompt(bsz=bsz)
-
         output = self.pretrained_model(input_ids=input_ids,
                                     attention_mask=attention_mask,
                                     token_type_ids=token_type_ids,

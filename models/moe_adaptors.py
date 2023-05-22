@@ -72,11 +72,11 @@ class Expert(nn.Module):
         self.scale = float(adapter_scalar)
         self.dropout = dropout
 
-        with torch.no_grad():
-            nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
-            nn.init.zeros_(self.up_proj.weight)
-            nn.init.zeros_(self.down_proj.bias)
-            nn.init.zeros_(self.up_proj.bias)
+        # with torch.no_grad():
+        #     nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
+        #     nn.init.zeros_(self.up_proj.weight)
+        #     nn.init.zeros_(self.down_proj.bias)
+        #     nn.init.zeros_(self.up_proj.bias)
         
         
 
@@ -115,6 +115,7 @@ class MoE_Adaptor(nn.Module):
         num_bases=80,
         gate_type='softmax',
         tau=1.0,
+        graph_index=None,
     ):
         super().__init__()
         
@@ -123,8 +124,9 @@ class MoE_Adaptor(nn.Module):
         self.num_experts = num_experts
         self.num_gnn_experts = 3
         self.gate_logits = nn.Parameter(torch.zeros(self.num_experts))
+        self.use_gates = True
         # self.gate = SoftmaxGating(input_dim, num_gates=num_experts, gate_type=gate_type, tau=tau)
-        
+        self.graph_index = graph_index
         output_dim = input_dim
         
         if expert_type == 'mlp':
@@ -139,28 +141,57 @@ class MoE_Adaptor(nn.Module):
                 ) for _ in range(num_experts)
             ])
         elif expert_type == 'gnn':
-            self.experts = nn.ModuleList([
-                RGCN(
-                    input_dim,
-                    hidden_dim,
-                    output_dim,
-                    num_relations=num_relations,
-                    num_bases=num_bases,
-                    num_hidden_layers=1,
-                    dropout=0.1,
-                    activation=activation,
-                ) if i < self.num_gnn_experts else 
-                Expert(
-                    input_dim,
-                    hidden_dim=hidden_dim,
-                    output_dim=output_dim,
-                    activation=activation,
-                    adapter_scalar=adapter_scalar,
-                    dropout=dropout,
-                ) for i in range(num_experts)
-            ])
+            if graph_index == None:
+                self.experts = nn.ModuleList([
+                    RGCN(
+                        input_dim,
+                        hidden_dim,
+                        output_dim,
+                        num_relations=num_relations,
+                        num_bases=num_bases,
+                        num_hidden_layers=1,
+                        dropout=0.1,
+                        activation=activation,
+                    ) if i < self.num_gnn_experts else 
+                    Expert(
+                        input_dim,
+                        hidden_dim=hidden_dim,
+                        output_dim=output_dim,
+                        activation=activation,
+                        adapter_scalar=adapter_scalar,
+                        dropout=dropout,
+                    ) for i in range(num_experts)
+                ])
+            else:
+                self.use_gates = False
+                if self.graph_index < self.num_gnn_experts:
+                    self.experts = RGCN(
+                        input_dim,
+                        hidden_dim,
+                        output_dim,
+                        num_relations=num_relations,
+                        num_bases=num_bases,
+                        num_hidden_layers=1,
+                        dropout=0.1,
+                        activation=activation,
+                    )
+                else:
+                    self.experts = Expert(
+                        input_dim,
+                        hidden_dim=hidden_dim,
+                        output_dim=output_dim,
+                        activation=activation,
+                        adapter_scalar=adapter_scalar,
+                        dropout=dropout,
+                    )
         else:
             raise NotImplementedError(f"Expert type \"{expert_type}\" not implemented!")
+    
+    def remove_experts(self):
+        if isinstance(self.experts, nn.ModuleList):
+            self.graph_index = torch.argmax(self.gate_logits).item()
+            setattr(self, 'experts', self.experts[self.graph_index])
+            self.use_gates = False
 
     def forward(self, x, add_residual=False, residual=None, graphs=None, tau=None, one_hot_gate=True):
         
@@ -171,32 +202,40 @@ class MoE_Adaptor(nn.Module):
         # t1 = time.time()
         # print(f"Gate: {t1-t0}")
         experts_output = []
-        for i, expert in enumerate(self.experts):
-            g = graphs[i] if graphs != None and i < self.num_gnn_experts else None
-            out = expert(x, add_residual=add_residual, residual=residual, graphs=g)
-            experts_output.append(out)
+        if self.graph_index != None:
+            g = graphs[self.graph_index] if graphs != None and self.graph_index < self.num_gnn_experts else None
+            experts_output = self.experts(x, add_residual=add_residual, residual=residual, graphs=g)
+        else:
+            for i, expert in enumerate(self.experts):
+                g = graphs[i] if graphs != None and i < self.num_gnn_experts else None
+                out = expert(x, add_residual=add_residual, residual=residual, graphs=g)
+                experts_output.append(out)
 
         # F.gumbel_softmax(experts_output)
         # experts_output = self.gate(experts_output.permute(1, 0, 2, 3))
         # pdb.set_trace()
-        if self.training:
-            batch_size = x.shape[0]
-            expanded_gate_logits = self.gate_logits.unsqueeze(1).expand(-1, batch_size)
-            gates = F.gumbel_softmax(expanded_gate_logits, tau=tau, hard=False, dim=0)[:, :, None, None]
-        else:
-            
-            # Take the expert with the single highest probability
-            if one_hot_gate:
-                arg_max = torch.argmax(self.gate_logits)
-                one_hot = torch.zeros_like(self.gate_logits)
-                one_hot[arg_max] = 1
-                gates = one_hot[:, None, None, None]
+        if self.use_gates:
+            if self.training:
+                batch_size = x.shape[0]
+                expanded_gate_logits = self.gate_logits.unsqueeze(1).expand(-1, batch_size)
+                gates = F.gumbel_softmax(expanded_gate_logits, tau=tau, hard=False, dim=0)[:, :, None, None]
             else:
-                gates = self.gate_logits.softmax(dim=0)[:, None, None, None]
-                # gates = self.gate.softmax(dim=-1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
-                # print(self.gate, gates[0, 0, 0].tolist())
-                # gates = F.gumbel_softmax(self.gate, tau=tau, hard=True, dim=-1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
-        output = (torch.stack(experts_output) * gates).sum(0)
+                
+                # Take the expert with the single highest probability
+                if one_hot_gate:
+                    arg_max = torch.argmax(self.gate_logits)
+                    one_hot = torch.zeros_like(self.gate_logits)
+                    one_hot[arg_max] = 1
+                    gates = one_hot[:, None, None, None]
+                else:
+                    gates = self.gate_logits.softmax(dim=0)[:, None, None, None]
+                    # gates = self.gate.softmax(dim=-1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
+                    # print(self.gate, gates[0, 0, 0].tolist())
+                    # gates = F.gumbel_softmax(self.gate, tau=tau, hard=True, dim=-1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
+            output = (torch.stack(experts_output) * gates).sum(0)
+        else:
+            output = experts_output
+            gates = self.gate_logits.softmax(dim=0)[:, None, None, None]
         
         # print(tau)
         # gates = self.gate(experts_output tau=tau, hard=False, dim=-1)

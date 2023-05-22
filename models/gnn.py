@@ -8,10 +8,10 @@ import pdb, time
 class RGCN(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_relations, num_bases, num_hidden_layers=1, dropout=0.1, activation=nn.ReLU):
         super().__init__()
-        self.down_proj = nn.Linear(input_dim, hidden_dim)
+        # self.down_proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList()
         self.activation = activation()
-        self.up_proj = nn.Linear(hidden_dim, output_dim)
+        # self.up_proj = nn.Linear(hidden_dim, output_dim)
 
         # Initialize GNN layers
         for i in range(num_hidden_layers + 1):
@@ -24,8 +24,8 @@ class RGCN(nn.Module):
 
             self.layers.append(
                 RelGraphConv(
-                    hidden_dim,
-                    hidden_dim,
+                    dim1,
+                    dim2,
                     num_relations,
                     regularizer=None,
                     num_bases=None,
@@ -38,7 +38,7 @@ class RGCN(nn.Module):
             )
 
     def forward(self, x, graphs, add_residual=False, residual=None):
-        x = self.down_proj(x)
+        # x = self.down_proj(x)
         sent_a_masks = graphs['sent_a_masks']
         graphs_a = graphs['graphs_a']
         gdata_a = graphs['gdata_a']
@@ -96,7 +96,7 @@ class RGCN(nn.Module):
             select_indices.append(x_indices)
         
         out = torch.stack([concatenated_rep[i][idx] for i, idx in enumerate(select_indices)])
-        out = self.up_proj(out)
+        # out = self.up_proj(out)
 
         return out
     
@@ -113,6 +113,7 @@ class RGCN(nn.Module):
         node_embeddings = self.activation(node_embeddings)
         
         graph = graph.to(node_embeddings.device)
+        pdb.set_trace()
         for layer in self.layers:
             types = torch.zeros_like(graph.edata['type'])
             types[graph.edata['type'] < 0] = 1

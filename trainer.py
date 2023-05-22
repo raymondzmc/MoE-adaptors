@@ -309,6 +309,8 @@ class Trainer:
         initial_tau: Optional[float] = 1,
         terminal_tau: Optional[float] = 0.1,
         tau_decay: Optional[bool] = False,
+        prune_gates: Optional[bool] = False,
+        steps_before_prune: Optional[int] = 1000,
     ):
         if args is None:
             output_dir = "tmp_trainer"
@@ -651,6 +653,9 @@ class Trainer:
         self.initial_tau = initial_tau
         self.terminal_tau = terminal_tau
         self.tau_decay = tau_decay
+
+        self.prune_gates = prune_gates
+        self.steps_before_prune = steps_before_prune
 
     def add_callback(self, callback):
         """
@@ -1670,6 +1675,7 @@ class Trainer:
         steps_trained_in_current_epoch = 0
         steps_trained_progress_bar = None
         total_steps_trained = 0
+        total_optimized_steps = 0
 
         # Check if continuing training from a checkpoint
         if resume_from_checkpoint is not None and os.path.isfile(
@@ -1771,11 +1777,14 @@ class Trainer:
             step = -1
             epoch_loss = 0.
             for step, inputs in enumerate(epoch_iterator):
+
                 if self.tau_decay:
                     tau = self.initial_tau - (total_steps_trained * ((self.initial_tau - self.terminal_tau) / (num_train_epochs * steps_in_epoch)))
                     inputs['tau'] = tau
                 else:
                     inputs['tau'] = self.initial_tau
+
+
                 # Skip past any already trained steps if resuming training
                 if steps_trained_in_current_epoch > 0:
                     steps_trained_in_current_epoch -= 1
@@ -1880,6 +1889,7 @@ class Trainer:
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
 
                     self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
+                    total_optimized_steps += 1
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
 
@@ -1949,7 +1959,6 @@ class Trainer:
 
         # Delete the last checkpoint when save_total_limit=1 if it's different from the best checkpoint and process allowed to save.
         if self.args.should_save and self.state.best_model_checkpoint is not None and self.args.save_total_limit == 1:
-            pdb.set_trace()
             for checkpoint in checkpoints_sorted:
                 if checkpoint != self.state.best_model_checkpoint:
                     logger.info(f"Deleting older checkpoint [{checkpoint}] due to args.save_total_limit")
