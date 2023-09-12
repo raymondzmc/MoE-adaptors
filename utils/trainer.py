@@ -14,6 +14,7 @@ def get_trainer_arguments(args):
         do_eval=True,
         do_predict=True,
         evaluation_strategy=args.evaluation_strategy,
+        eval_steps=args.eval_steps,
         prediction_loss_only=False,
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,

@@ -13,6 +13,8 @@ from utils.trainer import get_trainer_arguments
 
 from models.optimization import get_optimizer, get_lr_scheduler
 from models.modeling_roberta import RobertaForSequenceClassification
+from models.modeling_deberta_v2 import DebertaV2ForSequenceClassification
+from models.modeling_bert import BertForSequenceClassification
 from models.petl.petl_enc_model import PETLEncModel
 from models.petl.options import TuneArguments
 
@@ -39,11 +41,15 @@ glue_output_modes = {
 }
 
 def main(args):
-    # tokenizer = AutoTokenizer.from_pretrained(args.plm_name)
-    tokenizer = AutoTokenizer.from_pretrained(args.plm_name, add_prefix_space=True) # RoBERTa tokenizer
+    
+    if args.plm_name == 'roberta-base':
+        tokenizer = AutoTokenizer.from_pretrained(args.plm_name, add_prefix_space=True) # RoBERTa tokenizer
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(args.plm_name)
     
     load_graphs = args.expert_type == 'gnn'
     train_dataset, eval_dataset, compute_metrics, num_labels, num_relations = get_dataset(args.dataset, tokenizer, load_graphs=load_graphs)
+    
     compute_metrics = get_compute_metric(args.dataset)
 
     config = AutoConfig.from_pretrained(args.plm_name, num_labels=num_labels, finetuning_task=args.dataset)
@@ -57,7 +63,7 @@ def main(args):
     config.ffn_adapter_init_option="lora"
     config.ffn_adapter_scalar="4"
     config.ffn_bn=args.bottleneck_dim # ffn bottleneck dim
-    config.adaptor_type = args.adator_type
+    config.adaptor_type = args.adaptor_type
     config.adaptor_input = args.adaptor_input
     config.expert_type = args.expert_type
     config.gate_type = args.gate_type
@@ -67,7 +73,6 @@ def main(args):
     config.num_relations = num_relations
     config.num_bases = 80
     config.tau = args.initial_tau
-    config.use_all_hidden = args.use_all_hidden
 
     
     
@@ -98,18 +103,26 @@ def main(args):
     )
     
     
-    # prob_dir = f'output/glue/roberta/moe_gnn_gumbel_{args.dataset}_prune_gates_attn'
 
     # Train gates first
-    if args.prune_gates:
+    if args.prune_gates and args.graph_index == None:
         # if os.path.exists(os.path.join(prob_dir, 'gates_probs.pt')):
         #     probs_path = os.path.join(prob_dir, 'gates_probs.pt')
         # else:
         #     probs_path = os.path.join(prob_dir, 'gates_probs.500.pt')
         probs_path = os.path.join(args.output_dir, f'gates_probs.{args.num_interpret_steps}.pt')
+        
 
         if not os.path.exists(probs_path):
-            model = RobertaForSequenceClassification.from_pretrained(args.plm_name, config=config)
+            if args.plm_name == 'roberta-base':
+                model = RobertaForSequenceClassification.from_pretrained(args.plm_name, config=config)
+                model_name = 'roberta'
+            elif args.plm_name == 'microsoft/deberta-v3-base':
+                model = DebertaV2ForSequenceClassification.from_pretrained(args.plm_name, config=config)
+                model_name = 'deberta'
+            elif args.plm_name == 'bert-base-uncased':
+                model = BertForSequenceClassification.from_pretrained(args.plm_name, config=config)
+                model_name = 'bert'
             model = PETLEncModel(config, tune_args, model)
             optimizer = get_optimizer(args, model)
             lr_scheduler = transformers.get_scheduler(
@@ -118,6 +131,9 @@ def main(args):
                 num_warmup_steps=0,
                 num_training_steps=args.num_interpret_steps,
             )
+            
+            trainer_args.per_device_train_batch_size = 1
+            trainer_args.gradient_accumulation_steps = 32
             trainer_args.max_steps = args.num_interpret_steps
             trainer = Trainer(
                 model=model,
@@ -129,12 +145,17 @@ def main(args):
                 compute_metrics=compute_metrics,
                 optimizers=(optimizer, lr_scheduler),
                 initial_tau=args.initial_tau,
+                tau_decay=args.tau_decay,
+                model_name=model_name,
+                save_gate_steps=args.save_gate_steps,
             )
             trainer.train()
 
             # Plot gates
             all_probs = []
-            for layer in trainer.model.pretrained_model.roberta.encoder.layer:
+
+            encoder = getattr(trainer.model.pretrained_model, model_name).encoder
+            for layer in encoder.layer:
                 probs = (layer.ef_ffn_adapter.gate_logits / 0.001).softmax(dim=0).tolist()
                 all_probs.append(probs)
             sns.heatmap(all_probs, cmap='viridis', annot=True)
@@ -145,37 +166,52 @@ def main(args):
             plt.ylabel('Layers')
 
             # Save the heatmap
-            save_path = os.path.join(args.output_dir, f'{args.plm_name}.{args.gate_type}.{args.dataset}.{args.num_interpret_steps}.png')
+            save_path = os.path.join(args.output_dir, f"{args.plm_name.split('/')[-1]}.{args.gate_type}.{args.dataset}.{args.num_interpret_steps}.png")
             torch.save(all_probs, probs_path)
             plt.savefig(save_path)
             plt.clf()
         else:
             all_probs = torch.load(probs_path)
-    
-    graph_index = np.argmax(all_probs, axis=1).tolist()
-    config.graph_index = graph_index
-    model = RobertaForSequenceClassification.from_pretrained(args.plm_name, config=config)
-    model = PETLEncModel(config, tune_args, model, probs=all_probs)
-    # param_name_count = [(n, p.    ()) for n, p in model.named_parameters() if p.requires_grad]
-    param_count = [p.numel() for p in model.parameters() if p.requires_grad]
-    print("Number of parameters:", sum(param_count))
-    optimizer = get_optimizer(args, model)
+            all_probs = [x.cpu().detach().numpy() for x in all_probs]
 
-    args.max_steps = -1
-    trainer_args = get_trainer_arguments(args)
-    lr_scheduler = get_lr_scheduler(args, optimizer, len(train_dataset))
-    trainer = Trainer(
-        model=model,
-        args=trainer_args,
-        data_collator=data_collator,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset, 
-        tokenizer=tokenizer, 
-        compute_metrics=compute_metrics,
-        optimizers=(optimizer, lr_scheduler),
-        initial_tau=args.initial_tau,
-    )
-    trainer.train()
+        graph_index = np.full(12, 3)
+        gnn_layer_index = np.argsort(np.amax(np.array(all_probs)[:, :-1], axis=1))[::-1][:args.num_gnn_adaptors]
+        graph_index[gnn_layer_index] = np.argmax(np.take(np.array(all_probs)[:, :-1], gnn_layer_index, axis=0), axis=1)
+    
+    else:
+       graph_index = np.full(12, int(args.graph_index))
+
+    if not args.interpret_only:
+        config.graph_index = graph_index.tolist()
+        if args.plm_name == 'roberta-base':
+            model = RobertaForSequenceClassification.from_pretrained(args.plm_name, config=config)
+        elif args.plm_name == 'microsoft/deberta-v3-base':
+            model = DebertaV2ForSequenceClassification.from_pretrained(args.plm_name, config=config)
+        elif args.plm_name == 'bert-base-uncased':
+            model = BertForSequenceClassification.from_pretrained(args.plm_name, config=config)
+
+        model = PETLEncModel(config, tune_args, model)
+        
+        # param_name_count = [(n, p.numel()) for n, p in self.named_parameters() if p.requires_grad]
+        # [(n, p.numel()) for n, p in model.pretrained_model.roberta.encoder.layer[8].named_parameters() if p.requires_grad]
+        param_count = [p.numel() for p in model.pretrained_model.classifier.parameters() if p.requires_grad]
+        print("Number of parameters:", sum(param_count))
+        optimizer = get_optimizer(args, model)
+        args.max_steps = -1
+        trainer_args = get_trainer_arguments(args)
+        lr_scheduler = get_lr_scheduler(args, optimizer, len(train_dataset))
+        trainer = Trainer(
+            model=model,
+            args=trainer_args,
+            data_collator=data_collator,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset, 
+            tokenizer=tokenizer, 
+            compute_metrics=compute_metrics,
+            optimizers=(optimizer, lr_scheduler),
+            initial_tau=args.initial_tau,
+        )
+        trainer.train()
 
     # if not args.eval_only:
     #     trainer.train()
@@ -231,22 +267,24 @@ if __name__ == '__main__':
     # Model specific arguments
     parser.add_argument('-plm_name', default='bert-base-uncased', type=str, help='Name or path of pre-trained model for AutoModel')
     parser.add_argument('-pooling_method', default='cls', type=str, help='Pooling method for the final hidden states before classifier')
-    parser.add_argument('-adator_type', default='mlp', type=str, choices=['mlp', 'moe'])
-    parser.add_argument('-adaptor_input', default='hidden', type=str, choices=['hidden', 'attention'])
-    parser.add_argument('-expert_type', default='mlp', type=str, choices=['mlp', 'gnn'])
-    parser.add_argument('-gate_type', default='softmax', type=str, choices=['softmax', 'gumbel'])
-    parser.add_argument('-freeze_plm', action='store_true', help='Freeze PLM weights during training (default for adaptors)')
+    parser.add_argument('-adaptor_type', default='moe', type=str, choices=['mlp', 'moe'])
+    parser.add_argument('-adaptor_input', default='attention', type=str, choices=['hidden', 'attention'])
+    parser.add_argument('-expert_type', default='gnn', type=str, choices=['mlp', 'gnn'])
+    parser.add_argument('-gate_type', default='gumbel', type=str, choices=['softmax', 'gumbel'])
+    parser.add_argument('-freeze_plm', action='store_true', default=True, help='Freeze PLM weights during training (default for adaptors)')
     parser.add_argument('-load_graphs', action='store_true')
-    parser.add_argument('-bottleneck_dim', default=64, type=int)
+    parser.add_argument('-bottleneck_dim', default=50, type=int)
     parser.add_argument('-use_projection', action='store_true', help='Whether to first project hidden states into a lower dimension')
-    parser.add_argument('-use_all_hidden', action='store_true', help='Whether to use all hidden states')
-    parser.add_argument('-num_interpret_steps', default=1000, help='Number of interpretation steps before training.')
-
+    # parser.add_argument('-use_all_hidden', action='store_true', help='Whether to use all hidden states')
+    parser.add_argument('-num_interpret_steps', default=1000, type=int, help='Number of interpretation steps before training.')
+    parser.add_argument('-save_gate_steps', default=0, type=int, help='Number of steps to save gate logits during interpretation.')
+    parser.add_argument('-interpret_only', action='store_true', help='No training')
+    parser.add_argument('-num_gnn_adaptors', default=2, help='Number of GNN adaptors to use.')
 
     # Dataset/Dataloader Arguments
     parser.add_argument('-dataset', default=None, type=str, required=True, help='Name or path of dataset')
-    parser.add_argument('-per_device_train_batch_size', default=8, type=int)
-    parser.add_argument('-per_device_eval_batch_size', default=8, type=int)
+    parser.add_argument('-per_device_train_batch_size', default=2, type=int)
+    parser.add_argument('-per_device_eval_batch_size', default=4, type=int)
     parser.add_argument('-dataloader_num_workers', default=0, type=int, help='Number of workers in DataLoader, default to zero for Iterable Dataset')
     parser.add_argument('-dataloader_drop_last', action='store_true', help='Whether to drop the last incomplete batch.')
     parser.add_argument('-pad_to_max_length', action='store_true')
@@ -262,7 +300,7 @@ if __name__ == '__main__':
     parser.add_argument('-lr_scheduler_type', default='linear', type=str, choices=['linear', 'cosine', 'cosine_with_restarts', 'polynomial', 'constant', 'constant_with_warmup'])
     parser.add_argument('-warmup_ratio', default=0.06, type=float)
     parser.add_argument('-warmup_steps', default=0, type=int)
-    parser.add_argument('-initial_tau', default=1, type=float, help='Initial tau value for gumbel-softmax')
+    parser.add_argument('-initial_tau', default=0.1, type=float, help='Initial tau value for gumbel-softmax')
     parser.add_argument('-terminal_tau', default=0.1, type=float, help='Terminal tau value for gumbel-softmax')
     parser.add_argument('-tau_decay', action='store_true')
     
@@ -273,21 +311,21 @@ if __name__ == '__main__':
     parser.add_argument('-do_eval', action='store_true', help='Whether to run evaluation on the validation set  or not. (Not directly used by Trainer)')
     parser.add_argument('-do_predict', action='store_true', help='Whether to run predictions on the test set or not. (Not directly used by Trainer)')
     parser.add_argument('-evaluation_strategy', default='epoch', choices=['no', 'steps', 'epoch'], help='The evaluation strategy to adopt during training.')
+    parser.add_argument('-eval_steps', default=1000, type=int, help='Number of update steps between two evaluations if evaluation_strategy="steps".')
     parser.add_argument('-gradient_accumulation_steps', default=8, type=int, help='Number of updates steps to accumulate the gradients for, before performing a backward/update pass.')
-    parser.add_argument('-num_train_epochs', default=50, type=int, help='Total number of training epochs to perform.')
+    parser.add_argument('-num_train_epochs', default=30, type=int, help='Total number of training epochs to perform.')
     parser.add_argument('-max_steps', default=-1, type=int, help='If set to a positive number, the total number of training steps to perform. Overrides num_train_epochs.')
     parser.add_argument('-save_strategy', default='epoch', type=str, choices=['no', 'epoch', 'steps'], help='The checkpoint save strategy to adopt during training.')
-    parser.add_argument('-save_steps', default=500, type=int, help='Number of updates steps before two checkpoint saves if save_strategy=\'steps\'')
+    parser.add_argument('-save_steps', default=1000, type=int, help='Number of updates steps before two checkpoint saves if save_strategy=\'steps\'')
     parser.add_argument('-resume_from_checkpoint', default=None, help='The path to a folder with a valid checkpoint for your model (Not directly used by Trainer).')
     parser.add_argument('-save_total_limit', default=1, type=int, help='If a value is passed, will limit the total amount of checkpoints. Deletes the older checkpoints in output_dir.')
 
-    parser.add_argument('-prune_gates', action='store_true', help='Whether to prune experts based on gates')
-    # parser.add_argument('-steps_before_prune', type=int, default=1000, help='Number of steps to train before pruning the experts')
+    parser.add_argument('-prune_gates', action='store_true', default=True, help='Whether to prune experts based on gates')
     parser.add_argument('-plot_gates', action='store_true', help='Whether to plot the gates.')
     parser.add_argument('-eval_all', action='store_true', help='Whether to evaluate all checkpoints.')
     parser.add_argument('-eval_only', action='store_true', help='Whether to do evaluation only')
-    
-    
+    parser.add_argument('-graph_index', default=None, help='(Baseline) Setting the gate index manually.')
+
 
     logging.set_verbosity_info()
     logger = logging.get_logger("transformers")
