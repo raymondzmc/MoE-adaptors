@@ -61,7 +61,7 @@ class HardConcreteGating(nn.Module):
         return softmax_gates
 
 class Expert(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, activation=nn.GELU, adapter_scalar='4', dropout=0):
+    def __init__(self, input_dim, hidden_dim, output_dim, activation=nn.GELU, adapter_scalar='learnable_scalar', dropout=0):
         super().__init__()
 
         self.adapter_layer_norm_before = nn.LayerNorm(input_dim)
@@ -69,17 +69,19 @@ class Expert(nn.Module):
         self.non_linear_func = activation()
         self.up_proj = nn.Linear(hidden_dim, output_dim)
 
-        self.scale = float(adapter_scalar)
+        if adapter_scalar == "learnable_scalar":
+            self.scale = nn.Parameter(torch.ones(1))
+        else:
+            self.scale = float(adapter_scalar)
+
         self.dropout = dropout
 
-        # with torch.no_grad():
-        #     nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
-        #     nn.init.zeros_(self.up_proj.weight)
-        #     nn.init.zeros_(self.down_proj.bias)
-        #     nn.init.zeros_(self.up_proj.bias)
-        
-        
-
+        with torch.no_grad():
+            nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
+            nn.init.zeros_(self.up_proj.weight)
+            nn.init.zeros_(self.down_proj.bias)
+            nn.init.zeros_(self.up_proj.bias)
+    
     def forward(self, x, add_residual=True, residual=None, **kwargs):
         residual = x if residual is None else residual
         x = self.adapter_layer_norm_before(x)
@@ -128,7 +130,6 @@ class MoE_Adaptor(nn.Module):
         # self.gate = SoftmaxGating(input_dim, num_gates=num_experts, gate_type=gate_type, tau=tau)
         self.graph_index = graph_index
         output_dim = input_dim
-        
         if expert_type == 'mlp':
             self.experts = nn.ModuleList([
                 Expert(
@@ -186,6 +187,9 @@ class MoE_Adaptor(nn.Module):
                     )
         else:
             raise NotImplementedError(f"Expert type \"{expert_type}\" not implemented!")
+
+        
+        
     
     def remove_experts(self):
         if isinstance(self.experts, nn.ModuleList):
@@ -194,7 +198,6 @@ class MoE_Adaptor(nn.Module):
             self.use_gates = False
 
     def forward(self, x, add_residual=False, residual=None, graphs=None, tau=None, one_hot_gate=True):
-        
         
         # x = self.down_proj(x)
         # t0 = time.time()
@@ -220,7 +223,6 @@ class MoE_Adaptor(nn.Module):
                 expanded_gate_logits = self.gate_logits.unsqueeze(1).expand(-1, batch_size)
                 gates = F.gumbel_softmax(expanded_gate_logits, tau=tau, hard=False, dim=0)[:, :, None, None]
             else:
-                
                 # Take the expert with the single highest probability
                 if one_hot_gate:
                     arg_max = torch.argmax(self.gate_logits)

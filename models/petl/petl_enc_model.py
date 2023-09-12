@@ -1,5 +1,5 @@
 import torch
-from transformers import PreTrainedModel, RobertaConfig
+from transformers import PreTrainedModel, BertConfig, RobertaConfig, DebertaV2Config
 import torch.nn as nn
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 from models.petl.petl_factory import Prefix, MLP_Bias, Bias, PrefixDirectInit, PrefixCrossAttn
@@ -27,15 +27,17 @@ class PETLEncModel(PreTrainedModel):
         self.args = args
         self.pretrained_model = pretrained_model
 
-        if isinstance(config, RobertaConfig):
-            self.match_n_layer = config.num_hidden_layers
-            self.match_n_head = config.num_attention_heads
-            self.n_embd = config.hidden_size
-        else:
-            self.match_n_layer = config.decoder_layers
-            self.match_n_head = config.decoder_attention_heads
-            self.n_embd = config.d_model
+        self.match_n_layer = config.num_hidden_layers
+        self.match_n_head = config.num_attention_heads
+        self.n_embd = config.hidden_size
         self.match_n_embd = self.n_embd // self.match_n_head
+
+        if isinstance(config, BertConfig):
+            self.model_type = 'bert'
+        elif isinstance(config, RobertaConfig):
+            self.model_type = 'roberta'
+        elif isinstance(config, DebertaV2Config):
+            self.model_type = 'deberta'
 
         if "prefix" in args.attn_mode:
             self.setup_prefix(args, config)
@@ -54,7 +56,6 @@ class PETLEncModel(PreTrainedModel):
         logger.info("Declare PrefixTuning model!")
 
         if args.freeze_plm:        
-            not_freeze_set = []
             if args.unfreeze_params != 'none' and args.attn_mode != 'bitfit':
                 if args.unfreeze_params == 'LN':
                     # not_freeze_set = ['layernorm']  # input layernorm
@@ -65,10 +66,11 @@ class PETLEncModel(PreTrainedModel):
             elif args.attn_mode == 'bitfit':
                 not_freeze_set = ['bias']
                 all_match = True
-
+            
+            not_freeze_set.append('classifier')
             logger.info(not_freeze_set)
-
             freeze_set = []
+
             if args.ffn_mode == 'mh_adapter_random' or args.attn_option == 'mh_adapter':
                 # freeze the random mapping matrix
                 freeze_set = ['freeze_q_proj']
@@ -112,8 +114,12 @@ class PETLEncModel(PreTrainedModel):
         return None
 
     def prune_gates(self):
-        for index in range(len(self.pretrained_model.roberta.encoder.layer)):
-            self.pretrained_model.roberta.encoder.layer[index].ef_ffn_adapter.remove_experts()
+        if self.model_type == 'roberta':
+            for index in range(len(self.pretrained_model.roberta.encoder.layer)):
+                self.pretrained_model.roberta.encoder.layer[index].ef_ffn_adapter.remove_experts()
+        if self.model_type == 'deberta':
+            for index in range(len(self.pretrained_model.deberta.encoder.layer)):
+                self.pretrained_model.roberta.encoder.layer[index].ef_ffn_adapter.remove_experts()
 
     def forward(self,
                 input_ids=None,
@@ -133,19 +139,35 @@ class PETLEncModel(PreTrainedModel):
 
         bsz = input_ids.shape[0]
         prefix_state = self.get_prompt(bsz=bsz)
-        output = self.pretrained_model(input_ids=input_ids,
-                                    attention_mask=attention_mask,
-                                    token_type_ids=token_type_ids,
-                                    position_ids=position_ids,
-                                    head_mask=head_mask,
-                                    inputs_embeds=inputs_embeds,
-                                    labels=labels,
-                                    output_attentions=output_attentions,
-                                    output_hidden_states=output_hidden_states,
-                                    output_gates=output_gates,
-                                    return_dict=return_dict,
-                                    prefix_state=prefix_state,
-                                    graphs=graphs,
-                                    tau=tau,
-                                    )
+
+        if self.model_type in ['bert', 'roberta']:
+            output = self.pretrained_model(input_ids=input_ids,
+                                        attention_mask=attention_mask,
+                                        token_type_ids=token_type_ids,
+                                        position_ids=position_ids,
+                                        head_mask=head_mask,
+                                        inputs_embeds=inputs_embeds,
+                                        labels=labels,
+                                        output_attentions=output_attentions,
+                                        output_hidden_states=output_hidden_states,
+                                        output_gates=output_gates,
+                                        return_dict=return_dict,
+                                        prefix_state=prefix_state,
+                                        graphs=graphs,
+                                        tau=tau,
+                                        )
+        elif self.model_type == 'deberta':
+            output = self.pretrained_model(input_ids=input_ids,
+                                        attention_mask=attention_mask,
+                                        token_type_ids=token_type_ids,
+                                        position_ids=position_ids,
+                                        labels=labels,
+                                        output_attentions=output_attentions,
+                                        output_hidden_states=output_hidden_states,
+                                        output_gates=output_gates,
+                                        return_dict=return_dict,
+                                        prefix_state=prefix_state,
+                                        graphs=graphs,
+                                        tau=tau,
+                                        )
         return output

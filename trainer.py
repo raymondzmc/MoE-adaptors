@@ -306,11 +306,13 @@ class Trainer:
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        initial_tau: Optional[float] = 1,
+        initial_tau: Optional[float] = 5,
         terminal_tau: Optional[float] = 0.1,
         tau_decay: Optional[bool] = False,
         prune_gates: Optional[bool] = False,
         steps_before_prune: Optional[int] = 1000,
+        model_name: Optional[str] = None,
+        save_gate_steps: Optional[int] = 0,
     ):
         if args is None:
             output_dir = "tmp_trainer"
@@ -656,6 +658,8 @@ class Trainer:
 
         self.prune_gates = prune_gates
         self.steps_before_prune = steps_before_prune
+        self.model_name = model_name
+        self.save_gate_steps = save_gate_steps
 
     def add_callback(self, callback):
         """
@@ -1777,12 +1781,12 @@ class Trainer:
             step = -1
             epoch_loss = 0.
             for step, inputs in enumerate(epoch_iterator):
-
                 if self.tau_decay:
-                    tau = self.initial_tau - (total_steps_trained * ((self.initial_tau - self.terminal_tau) / (num_train_epochs * steps_in_epoch)))
+                    tau = max(self.initial_tau - (total_optimized_steps * ((self.initial_tau - self.terminal_tau) / (max_steps // 2))), self.terminal_tau)
                     inputs['tau'] = tau
                 else:
                     inputs['tau'] = self.initial_tau
+                    
 
 
                 # Skip past any already trained steps if resuming training
@@ -1890,6 +1894,17 @@ class Trainer:
 
                     self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
                     total_optimized_steps += 1
+
+                    if self.save_gate_steps > 0 and (total_optimized_steps % self.save_gate_steps == 0):
+                        all_probs = []
+                        encoder = getattr(self.model.pretrained_model, self.model_name).encoder
+                        for layer in encoder.layer:
+                            probs = layer.ef_ffn_adapter.gate_logits
+                            all_probs.append(probs)
+                        save_path = os.path.join(self.args.output_dir, f'gates_probs.{total_optimized_steps}.pt')
+                        torch.save(all_probs, save_path)
+                        
+
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
 
@@ -2596,6 +2611,7 @@ class Trainer:
             labels = inputs.pop("labels")
         else:
             labels = None
+        
         outputs = model(**inputs)
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.

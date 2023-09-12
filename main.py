@@ -178,8 +178,11 @@ def main(args):
         gnn_layer_index = np.argsort(np.amax(np.array(all_probs)[:, :-1], axis=1))[::-1][:args.num_gnn_adaptors]
         graph_index[gnn_layer_index] = np.argmax(np.take(np.array(all_probs)[:, :-1], gnn_layer_index, axis=0), axis=1)
     
-    else:
+    elif args.graph_index == 'custom':
+        graph_index = np.array([2, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0])
+    elif args.graph_index.isdigit():
        graph_index = np.full(12, int(args.graph_index))
+    
 
     if not args.interpret_only:
         config.graph_index = graph_index.tolist()
@@ -325,6 +328,7 @@ if __name__ == '__main__':
     parser.add_argument('-eval_all', action='store_true', help='Whether to evaluate all checkpoints.')
     parser.add_argument('-eval_only', action='store_true', help='Whether to do evaluation only')
     parser.add_argument('-graph_index', default=None, help='(Baseline) Setting the gate index manually.')
+    
 
 
     logging.set_verbosity_info()

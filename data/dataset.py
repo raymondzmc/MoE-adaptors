@@ -292,7 +292,7 @@ def get_dataset(name, tokenizer, load_graphs=False):
                 sentence2 = list(map(lambda x: x.strip(), examples[sentence2_key]))
                 texts = (sentence1, sentence2)
             
-            result = tokenizer(*texts, max_length=256, return_offsets_mapping=True)
+            result = tokenizer(*texts, truncation=True, max_length=256, return_offsets_mapping=True)
 
             # TODO: Make token_type_ids an option argument in Dataset
             result['token_type_ids'] = [[0 for _ in range(len(x))] for x in result.encodings]

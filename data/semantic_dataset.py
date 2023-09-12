@@ -27,6 +27,9 @@ class SemanticDataset(Dataset):
         self.graphs_b = graphs_b
         self.num_graphs = num_graphs
 
+        
+        
+
     def __getitem__(self, index):
         return [
             self.input_ids[index],

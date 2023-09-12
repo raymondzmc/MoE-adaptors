@@ -656,9 +656,26 @@ class RobertaLayer(nn.Module):
         else:
             adaptor_input = attention_output
 
-        layer_output, gates = apply_chunking_to_forward(
-            lambda x: self.feed_forward_chunk(x, graphs=graphs, tau=tau), self.chunk_size_feed_forward, self.seq_len_dim, adaptor_input,
-        )
+        if self.config.ffn_mode == 'adapter' and self.config.ffn_option == 'parallel':
+            adapter_change, gates = self.ef_ffn_adapter(adaptor_input, add_residual=False, graphs=graphs, tau=tau)
+        else:
+            adapter_change = None
+        
+        if self.config.adaptor_input == 'hidden':
+            intermediate_output = self.intermediate(attention_output + adapter_change)
+            layer_output = self.output(intermediate_output, attention_output)
+        else:
+            intermediate_output = self.intermediate(attention_output)
+            layer_output = self.output(intermediate_output, attention_output, adapter_change=adapter_change)
+
+        
+
+        # layer_output, gates = apply_chunking_to_forward(
+        #     lambda x: self.feed_forward_chunk(x, graphs=graphs, tau=tau), self.chunk_size_feed_forward, self.seq_len_dim, adaptor_input,
+        # )
+        
+
+
         outputs = (layer_output,) + outputs
 
         outputs = outputs + (gates,)
@@ -672,6 +689,7 @@ class RobertaLayer(nn.Module):
         return outputs
 
     def feed_forward_chunk(self, attention_output, graphs=None, tau=None):
+        print(attention_output.shape)
         if self.config.ffn_mode == 'adapter' and self.config.ffn_option == 'parallel':
             adapter_change, gates = self.ef_ffn_adapter(attention_output, add_residual=False, graphs=graphs, tau=tau)
         else:
@@ -694,6 +712,8 @@ class RobertaEncoder(nn.Module):
             graph_index = [None] * config.num_hidden_layers
         self.layer = nn.ModuleList([RobertaLayer(config, graph_index=graph_index[i]) for i in range(config.num_hidden_layers)])
 
+        # self.layer[-1].ef_ffn_adapter.gate_logits.register_hook(lambda grad: print(f'Gate logits grad: {grad}'))
+        # self.layer[-1].output.dense.weight.register_hook(lambda grad: print(f'Output dense grad: {grad}'))
     def forward(
         self,
         hidden_states,
@@ -779,7 +799,8 @@ class RobertaEncoder(nn.Module):
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
-
+        
+        
         if not return_dict:
             return tuple(
                 v
@@ -949,7 +970,6 @@ class RobertaModel(RobertaPreTrainedModel):
         self.pooler = RobertaPooler(config) if add_pooling_layer else None
 
         # self.set_bias_tuning_params()
-
         self.init_weights()
 
     def get_input_embeddings(self):
@@ -1406,9 +1426,6 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
 
         self.roberta = RobertaModel(config, add_pooling_layer=False)
         self.classifier = RobertaClassificationHead(config)
-        
-        if config.use_all_hidden:
-            self.gate_logits = nn.Parameter(torch.zeros(self.config.num_hidden_layers + 1))
 
         self.init_weights()
 
@@ -1444,9 +1461,6 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if self.config.use_all_hidden:
-            output_hidden_states = True
-
         outputs = self.roberta(
             input_ids,
             attention_mask=attention_mask,
@@ -1462,19 +1476,7 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
             graphs=graphs,
             tau=tau,
         )
-
-        if self.config.use_all_hidden:
-            batch_size = outputs[0].shape[0]
-            expanded_gate_logits = self.gate_logits.unsqueeze(1).expand(-1, batch_size)
-
-            if self.training:
-                gates = torch.nn.functional.gumbel_softmax(expanded_gate_logits, tau=tau, hard=False, dim=0)[:, :, None, None]
-            else:
-                gates = self.gate_logits.softmax(dim=0)[:, None, None, None]
-                
-            sequence_output = (torch.stack(outputs['hidden_states']) * gates).sum(0)
-        else:
-            sequence_output = outputs[0]
+        sequence_output = outputs[0]
 
         logits = self.classifier(sequence_output)
         if isinstance(labels, list):
@@ -1501,7 +1503,6 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
             elif self.config.problem_type == "multi_label_classification":
                 loss_fct = BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels)
-
         if not return_dict:
             output = (logits,) + outputs[2:]
             return ((loss,) + output) if loss is not None else output

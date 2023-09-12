@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 from dgl.nn.pytorch import RelGraphConv
 
-import pdb, time
+import pdb, time, math
 
 class RGCN(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_relations, num_bases, num_hidden_layers=1, dropout=0.1, activation=nn.ReLU):
@@ -29,6 +29,7 @@ class RGCN(nn.Module):
                     num_relations,
                     regularizer=None,
                     num_bases=None,
+                    bias=True,
                     # regularizer="basis",
                     # num_bases=num_bases,
                     activation=activation(),
@@ -43,10 +44,13 @@ class RGCN(nn.Module):
         graphs_a = graphs['graphs_a']
         gdata_a = graphs['gdata_a']
 
-        node_embs_a, node_emb_mask_a = pool_node_embeddings(x, sent_a_masks, gdata_a, graphs_a.batch_num_nodes())
-        node_embs_a = self.propagate_graph(graphs_a, node_embs_a, node_emb_mask_a)
+        if len(graphs_a.nodes()) > 0:
+            node_embs_a, node_emb_mask_a = pool_node_embeddings(x, sent_a_masks, gdata_a, graphs_a.batch_num_nodes())
+            node_embs_a = self.propagate_graph(graphs_a, node_embs_a, node_emb_mask_a)
+        else:
+            node_embs_a = x.new_empty(0)
         
-        no_graph_nodes = torch.ones_like(sent_a_masks)
+        # no_graph_nodes = torch.ones_like(sent_a_masks)
         concatenated_rep = torch.cat((x, node_embs_a), dim=1)
         # graph_indices = []
         # results = []
@@ -64,8 +68,12 @@ class RGCN(nn.Module):
             sent_b_masks = graphs['sent_b_masks']
             graphs_b = graphs['graphs_b']
             gdata_b = graphs['gdata_b']
-            node_embs_b, node_emb_mask_b = pool_node_embeddings(x, sent_b_masks, gdata_b, graphs_b.batch_num_nodes())
-            node_embs_b = self.propagate_graph(graphs_b, node_embs_b, node_emb_mask_b)
+            if len(graphs_b.nodes()) > 0:
+                node_embs_b, node_emb_mask_b = pool_node_embeddings(x, sent_b_masks, gdata_b, graphs_b.batch_num_nodes())
+                node_embs_b = self.propagate_graph(graphs_b, node_embs_b, node_emb_mask_b)
+            else:
+                node_embs_b = x.new_empty(0)
+            
             concatenated_rep = torch.cat((concatenated_rep, node_embs_b), dim=1)
 
         select_indices = []
@@ -89,12 +97,15 @@ class RGCN(nn.Module):
                 sent_b_indices = sent_b_indices if isinstance(sent_b_indices, list) else [sent_b_indices]
                 wp_indices_b = [sent_b_indices[x] for x in wp_indices_b]
                 for wp_idx, graph_idx in zip(wp_indices_b, graph_indices_b):
-                    x_indices[wp_idx] = x.shape[1] + node_embs_a.shape[1] + graph_idx
+                    if len(node_embs_a.shape) > 1:
+                        x_indices[wp_idx] = x.shape[1] + node_embs_a.shape[1] + graph_idx
+                    else:
+                        x_indices[wp_idx] = x.shape[1] + graph_idx
             
-        
+    
             # results.append(torch.stack((node_embs_a[i][graph_indices], x[i][no_graph_nodes[i]])))
             select_indices.append(x_indices)
-        
+
         out = torch.stack([concatenated_rep[i][idx] for i, idx in enumerate(select_indices)])
         # out = self.up_proj(out)
 
@@ -113,16 +124,16 @@ class RGCN(nn.Module):
         node_embeddings = self.activation(node_embeddings)
         
         graph = graph.to(node_embeddings.device)
-        pdb.set_trace()
         for layer in self.layers:
             types = torch.zeros_like(graph.edata['type'])
             types[graph.edata['type'] < 0] = 1
             graph.edata['type'] = types
+            
             node_embeddings = layer(graph,
-            node_embeddings,
-            graph.edata['type'] if 'type' in graph.edata else h.new_empty(0),
-            graph.edata['norm'] if 'norm' in graph.edata else h.new_empty(0),
-        )
+                node_embeddings,
+                graph.edata['type'] if 'type' in graph.edata else h.new_empty(0),
+                graph.edata['norm'] if 'norm' in graph.edata else h.new_empty(0),
+            )
 
         return self.unflatten_node_embeddings(node_embeddings, node_embeddings_mask)
 

@@ -44,6 +44,7 @@ class BaseModelOutput(ModelOutput):
     last_hidden_state: torch.FloatTensor = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
+    gates: Optional[Tuple[torch.FloatTensor]] = None
 
 
 @dataclass

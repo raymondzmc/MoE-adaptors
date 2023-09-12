@@ -401,7 +401,8 @@ class Adapter_Layer(nn.Module):
                  dropout=0.0,
                  init_option="bert",
                  adapter_scalar="1.0",
-                 adapter_layernorm_option="in"):
+                 adapter_layernorm_option="in"
+        ):
         super().__init__()
         self.n_embd = config.d_model if d_model is None else d_model
         self.down_size = config.attn_bn if bottleneck is None else bottleneck
@@ -433,7 +434,7 @@ class Adapter_Layer(nn.Module):
                 nn.init.zeros_(self.down_proj.bias)
                 nn.init.zeros_(self.up_proj.bias)
 
-    def forward(self, x, add_residual=True, residual=None):
+    def forward(self, x, add_residual=True, residual=None, **kwargs):
         residual = x if residual is None else residual
         if self.adapter_layernorm_option == 'in':
             x = self.adapter_layer_norm_before(x)
@@ -453,7 +454,7 @@ class Adapter_Layer(nn.Module):
         else:
             output = up
 
-        return output
+        return output, None
 
 
 def softmax_gating(logits_1, logits_2):
