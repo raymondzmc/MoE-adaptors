@@ -279,9 +279,9 @@ def get_dataset(name, tokenizer, load_graphs=False):
                     for f in graph_files:
                         graphs[split][graph_name].extend(torch.load(f))
 
-            # Check if there's the same number of graphs
-            keys = list(graphs[split].keys())
-            assert [len(graphs[split][k]) == graphs[split][keys[0]] for k in keys]
+                # Check if there's the same number of graphs
+                keys = list(graphs[split].keys())
+                assert [len(graphs[split][k]) == graphs[split][keys[0]] for k in keys]
 
         num_sem_relations = 2
         def preprocess_function(examples):
